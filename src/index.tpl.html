@@ -3,60 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Isoforge — cripta (fase 0)</title>
+<title>Isoforge — cripta em ASCII</title>
 <meta name="color-scheme" content="dark">
 <!--__STYLE__-->
 </head>
 <body>
-<canvas id="screen"></canvas>
-
-<div id="hud">
-  <section class="panel" id="status-panel">
-    <header class="panel-title">
-      <span>isoforge · fase 0</span>
-      <span class="badge">semente <b id="hud-seed-badge">—</b></span>
-    </header>
-    <div class="row"><span class="label">fps</span><span class="value" id="hud-fps">—</span></div>
-    <div class="row"><span class="label">quadro p50</span><span class="value" id="hud-frame-p50">—</span></div>
-    <div class="row"><span class="label">quadro p95</span><span class="value" id="hud-frame-p95">—</span></div>
-    <div class="row"><span class="label">desenho p95</span><span class="value" id="hud-draw-p95">—</span></div>
-    <div class="row"><span class="label">pisos</span><span class="value" id="hud-tiles">—</span></div>
-    <div class="row"><span class="label">paredes</span><span class="value" id="hud-blocks">—</span></div>
-    <div class="row"><span class="label">sprítes</span><span class="value" id="hud-sprites">—</span></div>
-    <div class="row"><span class="label">tique</span><span class="value" id="hud-tick">—</span></div>
-    <div class="row"><span class="label">estado</span><span class="value" id="hud-state">—</span></div>
-    <div class="row"><span class="label">sob o mouse</span><span class="value" id="hud-mouse-tile">—</span></div>
-    <div class="row"><span class="label">jogador</span><span class="value" id="hud-player-tile">—</span></div>
-    <div class="row"><span class="label">movimento</span><span class="value" id="hud-move-mode">—</span></div>
-  </section>
-
-  <section class="panel" id="debug-panel" data-visible="false">
-    <header class="panel-title"><span>detalhes</span></header>
-    <div class="row"><span class="label">escala de pixel</span><span class="value" id="hud-scale">—</span></div>
-    <div class="row"><span class="label">passos por quadro</span><span class="value" id="hud-steps">—</span></div>
-    <div class="row"><span class="label">faixa de tiles</span><span class="value" id="hud-bounds">—</span></div>
-    <div class="row"><span class="label">ordenados</span><span class="value" id="hud-drawables">—</span></div>
-    <div class="row"><span class="label">descartados no teste</span><span class="value" id="hud-culled">—</span></div>
-    <div class="row"><span class="label">mundo</span><span class="value" id="hud-world">—</span></div>
-    <div class="row"><span class="label">semente</span><span class="value" id="hud-seed">—</span></div>
-  </section>
-
-  <footer id="control-bar">
-    <span class="key">W A S D</span> andar
-    <span class="sep">·</span>
-    <span class="key">clique</span> caminhar até o tile
-    <span class="sep">·</span>
-    <span class="key">F</span> tela cheia
-    <span class="sep">·</span>
-    <span class="key">H</span> detalhes
-    <span class="sep">·</span>
-    <span class="key">R</span> nova semente
-    <span class="sep">·</span>
-    <span class="key">G</span> regerar a mesma
-    <button id="fullscreen-button" type="button">tela cheia</button>
-  </footer>
-</div>
-
+<!-- The entire game is this one element: a character grid. World, entities and
+     HUD are all drawn into the same cells. -->
+<pre id="screen" tabindex="0" spellcheck="false"></pre>
 <script>
 /*__MODULES__*/
 </script>

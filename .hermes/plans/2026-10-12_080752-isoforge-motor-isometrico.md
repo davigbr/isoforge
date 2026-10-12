@@ -48,6 +48,61 @@
 
 **Limitação do ambiente de auditoria (não do jogo):** em aba de fundo o navegador suspende `requestAnimationFrame` (`visibilityState: "hidden"`), então o loop parece morto (0 quadros, 0 tiques). O `audit_phase0.py` traz a página para frente e assere `visible` antes de medir.
 
+## 0.2 Pivô: o motor é de TEXTO (arte ASCII), não de pixel art
+
+Requisito que chegou depois: **tudo em arte ASCII**, como no protótipo do navio pirata
+(`@session:default/20261012_070611_0915e6`, variante HUGE: 214×69 caracteres, rampa de 91
+caracteres, cor por célula). O motor foi reescrito; o arquivo não tem mais canvas nem imagem
+nenhuma (o próprio `build.py` falha o build se encontrar `<canvas` ou `data:image`).
+
+**Medição que decidiu o caminho** (grid 214×69 = 14.766 células, mesma fonte, mesmo navegador):
+
+| rota de render | p50 | p95 |
+|---|---|---|
+| DOM: linhas de texto com corridas de cor | **2,1 ms** | **3,9 ms** |
+| canvas: atlas de glifos × cores, 14.766 blits | 9,4 ms | 49,4 ms |
+
+E com a arte real da cripta (185 cores, 60 corridas por linha): 2,54 ms e 135 KB de HTML por
+quadro. Ou seja: **texto no DOM é 4× mais rápido na mediana e 12× no p95** — o caminho do navio
+não é só o mais bonito, é o mais rápido. Não existe canvas no motor.
+
+**O que sobreviveu ao pivô, sem uma linha alterada:** a simulação (passo fixo, determinismo,
+emenda do loop), o A*, a colisão, o save, o gerador por seed e **a matemática de culling/oclusão**
+— a projeção 2:1 passou a ser medida em células em vez de pixels (tile 10×3 células = 66×33 px
+com fonte de 11 px: a mesma proporção do tile 64×32 do Diablo 2).
+
+**O que mudou:** `atlas.js` + `canvas_renderer.js` saíram; entraram `text_renderer.js` (grade de
+caracteres, primitivas de polígono/linha em células, corridas de cor, cache por linha),
+`art.js` (a cripta desenhada em glifos) e `world_view.js` (caminhada dos tiles visíveis + ordem
+de pintura). O HUD passou a ser **box-drawing desenhado na mesma grade** — sem overlay de DOM.
+
+**Números da versão de texto (auditados, 26/26):**
+
+| medida | resultado |
+|---|---|
+| grade em 1440×900 | 184 × 69 células (fonte 13,0 px) |
+| fps | 59,9 (p50 16,7 ms · p95 17,6 ms) |
+| render p95 parado | **1,6 ms** |
+| render p95 andando | **4,3 ms** |
+| escrita no DOM parado | **0 bytes** (0 de 69 linhas) |
+| escrita no DOM andando | 16 KB de 176 KB (6 de 69 linhas) |
+| culling | tiles desenhados == tiles que tocam a tela (diff 0, sem furo) |
+| clique | célula clicada == tile do destino (projeção inversa exata) |
+| arquivo | 61,7 KB, sem canvas, sem imagem, sem `http` |
+
+**Quatro defeitos reais que a auditoria pegou durante o pivô:**
+
+1. Cor do piso variando por célula (mesmo quantizada) → corridas de 1 célula, 162 spans por linha,
+   335 KB por quadro e **30 fps**. Passou a ser uma cor por tile (mais o degrau de cima e o de
+   baixo): corridas de 5–9 células.
+2. `pre.innerHTML` com a grade inteira a cada quadro: o navegador parseia e re-layouta 176 KB
+   mesmo quando nada mudou (era o custo real; o render em JS era só 7,8 ms). Cada linha virou um
+   elemento próprio, e só as linhas que mudaram são escritas.
+3. Hash FNV-1a (uint32) guardado em `Int32Array`: a comparação `===` falhava para todo valor ≥ 2³¹,
+   então ~55% das linhas eram reconstruídas à toa. `Uint32Array` resolve.
+4. O HUD mostrava spans/kb por quadro no painel principal — valores que mudam sempre, então a grade
+   nunca ficava quieta. Métricas por quadro foram para o painel de detalhes (tecla H).
+
 ---
 
 ## 1. Medições que decidiram a arquitetura

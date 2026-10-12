@@ -1,138 +1,44 @@
-/* Isoforge — crypt theme. Standalone game page: it owns its palette (the chat
-   frame's theme variables do not apply here). */
-:root {
-  --stone: #0b0a08;
-  --stone-2: #14110d;
-  --gold: #c8a45c;
-  --bone: #d8cbb0;
-  --blood: #8f2f2f;
-  --line: rgba(200, 164, 92, 0.32);
-}
+/* Isoforge — texto puro. A página é um terminal: um <pre>, fundo quase preto,
+   nada de imagem ou canvas. A cor vem por célula, do renderizador. */
 
 html, body {
   margin: 0;
   padding: 0;
+  width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #070605;
-  color: var(--bone);
-  font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #06060a;
+  color: #d8cbb0;
+  font-family: "SFMono-Regular", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
 }
 
 #screen {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
   display: block;
-  background: #070605;
+  background: #06060a;
+  white-space: pre;
+  font-family: inherit;
+  font-variant-ligatures: none;
+  font-kerning: none;
+  letter-spacing: 0;
   cursor: crosshair;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+  user-select: none;
+  outline: none;
   touch-action: none;
 }
 
-#hud {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  user-select: none;
-}
+#screen i { font-style: normal; }
 
-.panel {
-  position: absolute;
-  min-width: 208px;
-  padding: 8px 10px 9px;
-  background: rgba(11, 10, 8, 0.82);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-}
-
-#status-panel { top: 12px; left: 12px; }
-
-#debug-panel {
-  top: 12px;
-  right: 12px;
-  display: none;
-}
-#debug-panel[data-visible="true"] { display: block; }
-
-.panel-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-  padding-bottom: 5px;
-  border-bottom: 1px solid var(--line);
-  color: var(--gold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: 10px;
-}
-
-.badge { color: rgba(216, 203, 176, 0.6); text-transform: none; letter-spacing: 0; }
-.badge b { color: var(--bone); }
-
-.row {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 1px 0;
-}
-.row .label { color: rgba(216, 203, 176, 0.52); }
-.row .value { color: var(--gold); font-variant-numeric: tabular-nums; }
-
-#control-bar {
-  position: absolute;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  max-width: calc(100vw - 24px);
-  padding: 7px 12px;
-  background: rgba(11, 10, 8, 0.82);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  color: rgba(216, 203, 176, 0.7);
-  white-space: nowrap;
-}
-
-.key {
-  padding: 1px 5px;
-  border: 1px solid rgba(200, 164, 92, 0.45);
-  border-radius: 2px;
-  color: var(--gold);
-}
-.sep { color: rgba(200, 164, 92, 0.35); }
-
-#fullscreen-button {
-  pointer-events: auto;
-  margin-left: 6px;
-  padding: 3px 9px;
-  background: transparent;
-  border: 1px solid rgba(200, 164, 92, 0.55);
-  border-radius: 2px;
-  color: var(--gold);
-  font: inherit;
-  cursor: pointer;
-}
-#fullscreen-button:hover { background: rgba(200, 164, 92, 0.12); }
-
-@media (max-width: 760px) {
-  .panel { min-width: 168px; font-size: 11px; }
-  #control-bar {
-    left: 8px;
-    right: 8px;
-    bottom: 8px;
-    transform: none;
-    flex-wrap: wrap;
-    justify-content: center;
-    white-space: normal;
-    gap: 5px;
-    font-size: 10px;
-    max-width: none;
-  }
-  #control-bar .key { padding: 0 3px; }
+/* One block per row: the renderer only rewrites the rows that changed. */
+#screen .r {
+  display: block;
+  min-height: 1em;
+  white-space: pre;
 }

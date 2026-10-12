@@ -1,7 +1,8 @@
-// Boot: input, camera follow, render wiring, and the audit hooks.
+// Boot: input, camera follow, render wiring, audit hooks. The engine is text:
+// one <pre>, one character grid, no canvas anywhere.
 
 // Screen-pure directions in world space. W is up on screen, so it steps back on
-// both axes; summing two of these and normalizing gives the diagonals.
+// both axes; summing two of these and normalising gives the diagonals.
 var KEY_DIRECTIONS = {
   KeyW: [-1, -1], ArrowUp: [-1, -1],
   KeyS: [1, 1], ArrowDown: [1, 1],
@@ -15,16 +16,17 @@ function readSeedFromHash() {
 }
 
 function boot() {
-  var canvas = document.getElementById("screen");
+  var pre = document.getElementById("screen");
   var seed = readSeedFromHash();
   var sim = createSimulation(seed);
-  var renderer = createCanvasRenderer(canvas);
-  var hud = createHud();
+  var renderer = createTextRenderer(pre);
+  var world = createWorldView(renderer);
+  var hud = createHud(renderer);
   var camera = sim.camera;
   var keys = Object.create(null);
   var hoveredTile = { x: 0, y: 0, walkable: true, inside: false };
-  var debugVisible = false;
   var errors = [];
+  var lastPresent = { spans: 0, htmlBytes: 0, presentMs: 0 };
 
   window.addEventListener("error", function (event) {
     errors.push(String(event.message));
@@ -35,18 +37,21 @@ function boot() {
     nativeConsoleError.apply(console, arguments);
   };
 
+  function metrics() { return renderer.metrics(); }
+
   function resize() {
-    renderer.resize(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1);
-    clampCamera(camera, sim.grid.width, sim.grid.height, renderer.viewportWidth(), renderer.viewportHeight());
+    renderer.resize(window.innerWidth, window.innerHeight);
+    clampCamera(camera, sim.grid.width, sim.grid.height, metrics().cols, metrics().rows);
   }
 
+  // Mouse -> world: cell indices come from the measured cell size, then the
+  // exact inverse projection turns the cell into world coordinates.
   function mouseToWorld(clientX, clientY) {
-    var rect = canvas.getBoundingClientRect();
-    var sx = (clientX - rect.left) * RENDER_SCALE - renderer.viewportWidth() / 2
-      + worldToScreenX(camera.x, camera.y);
-    var sy = (clientY - rect.top) * RENDER_SCALE - renderer.viewportHeight() / 2
-      + worldToScreenY(camera.x, camera.y);
-    return { x: screenToWorldX(sx, sy), y: screenToWorldY(sx, sy) };
+    var rect = pre.getBoundingClientRect();
+    var m = metrics();
+    var cellX = Math.floor((clientX - rect.left) / m.cellW);
+    var cellY = Math.floor((clientY - rect.top) / m.cellH);
+    return cellToWorld(cellX + 0.5, cellY + 0.5, camera, m.cols, m.rows);
   }
 
   function currentInput() {
@@ -79,10 +84,7 @@ function boot() {
     if (event.code === "F1") event.preventDefault();
     keys[event.code] = true;
     if (event.code === "KeyF") fullscreen();
-    if (event.code === "KeyH") {
-      debugVisible = !debugVisible;
-      hud.setDebugVisible(debugVisible);
-    }
+    if (event.code === "KeyH") hud.setDebugVisible(!hud.isDebugVisible());
     if (event.code === "KeyR") loadSeed(randomSeed());
     if (event.code === "KeyG") loadSeed(sim.seed);
     if (KEY_DIRECTIONS[event.code]) {
@@ -95,79 +97,102 @@ function boot() {
   window.addEventListener("blur", function () { keys = Object.create(null); });
   window.addEventListener("resize", resize);
 
-  canvas.addEventListener("mousemove", function (event) {
-    var world = mouseToWorld(event.clientX, event.clientY);
-    hoveredTile.x = Math.floor(world.x);
-    hoveredTile.y = Math.floor(world.y);
+  pre.addEventListener("mousemove", function (event) {
+    var world_ = mouseToWorld(event.clientX, event.clientY);
+    hoveredTile.x = Math.floor(world_.x);
+    hoveredTile.y = Math.floor(world_.y);
     hoveredTile.walkable = sim.grid.isWalkableTile(hoveredTile.x, hoveredTile.y);
     hoveredTile.inside = true;
   });
-  canvas.addEventListener("mouseleave", function () { hoveredTile.inside = false; });
-  canvas.addEventListener("mousedown", function (event) {
+  pre.addEventListener("mouseleave", function () { hoveredTile.inside = false; });
+  pre.addEventListener("mousedown", function (event) {
     if (event.button !== 0) return;
-    var world = mouseToWorld(event.clientX, event.clientY);
-    sim.setTarget(world.x, world.y);
+    var world_ = mouseToWorld(event.clientX, event.clientY);
+    sim.setTarget(world_.x, world_.y);
   });
 
-  var fullscreenButton = document.getElementById("fullscreen-button");
-  if (fullscreenButton) {
-    fullscreenButton.addEventListener("click", fullscreen);
-  }
-
   function render(alpha) {
-    renderer.beginFrame(camera);
-    renderer.drawGround(sim.grid, camera);
-    if (hoveredTile.inside) {
-      renderer.drawGroundCursor(hoveredTile.x + 0.5, hoveredTile.y + 0.5, !hoveredTile.walkable);
-    }
-    for (var i = 0; i < sim.entities.length; i++) {
-      var entity = sim.entities[i];
-      renderer.submitEntity(entity.kind, entity.prevX, entity.prevY, entity.x, entity.y, alpha);
-    }
-    renderer.flush();
+    renderer.beginFrame();
+    world.draw(sim, camera, alpha, hoveredTile);
 
+    var m = metrics();
     var stats = loop.stats;
-    var bounds = renderer.stats.bounds;
-    hud.update({
-      stats: stats,
-      render: renderer.stats,
-      tick: sim.getTick(),
-      seed: sim.seed,
+    hud.draw({
+      fpsText: stats.fps.toFixed(0) + " fps",
+      p50Text: stats.p50.toFixed(1) + " ms",
+      p95Text: stats.p95.toFixed(1) + " ms",
+      drawText: stats.renderP95.toFixed(2) + " ms",
+      cellsText: m.cols + "×" + m.rows,
+      spanText: String(lastPresent.spans),
+      kbText: (lastPresent.htmlBytes / 1024).toFixed(0) + "/" + (lastPresent.gridBytes / 1024).toFixed(0) + " kb",
+      rebuiltText: lastPresent.rebuiltRows + "/" + m.rows,
+      tick: String(sim.getTick()),
+      seed: String(sim.seed),
       stateHash: sim.stateHash(false),
       mouseTile: hoveredTile.inside
-        ? hoveredTile.x + "," + hoveredTile.y + (hoveredTile.walkable ? "" : " (parede)")
+        ? hoveredTile.x + "," + hoveredTile.y + (hoveredTile.walkable ? "" : " parede")
         : "—",
       playerTile: Math.floor(sim.player.x) + "," + Math.floor(sim.player.y),
-      moveMode: sim.player.targetX !== null ? "clique em linha reta" : "teclado",
-      scale: RENDER_SCALE,
-      bounds: bounds ? bounds.x0 + "," + bounds.y0 + " → " + bounds.x1 + "," + bounds.y1 : "—",
-      worldSize: sim.grid.width + "×" + sim.grid.height
+      gridText: m.cols + "×" + m.rows,
+      fontText: m.fontPx.toFixed(1) + " px",
+      boundsText: world.stats.bounds
+        ? world.stats.bounds.x0 + "," + world.stats.bounds.y0 + "→" + world.stats.bounds.x1 + "," + world.stats.bounds.y1
+        : "—",
+      drawables: String(world.stats.drawables),
+      culled: String(world.stats.culled),
+      tilesText: world.stats.tilesDrawn + "+" + world.stats.blocksDrawn,
+      worldText: sim.grid.width + "×" + sim.grid.height,
+      moveMode: sim.player.targetX !== null ? "clique" : "teclado"
     });
+
+    lastPresent = renderer.present();
+    stats.presentMs = lastPresent.presentMs;
   }
 
   var loop = createLoop({
     step: function () {
       sim.step(currentInput());
-      clampCamera(camera, sim.grid.width, sim.grid.height, renderer.viewportWidth(), renderer.viewportHeight());
+      clampCamera(camera, sim.grid.width, sim.grid.height, metrics().cols, metrics().rows);
     },
     render: render
   });
 
   resize();
-  hud.setDebugVisible(false);
   loop.start();
 
   window.ISO = {
-    version: 1,
+    version: 2,
+    mode: "text",
     seed: seed,
     sim: sim,
     grid: sim.grid,
     renderer: renderer,
+    world: world,
+    hud: hud,
     camera: camera,
     loop: loop,
-    hud: hud,
     headless: createHeadless(),
+    metrics: metrics,
+    gridText: function () { return renderer.gridText(); },
+    cellAt: function (x, y) { return { glyph: renderer.glyphAt(x, y), color: renderer.colorAt(x, y) }; },
+    // Test plumbing: the exact inverse of mouseToWorld, so the audit can click
+    // the centre of a known tile and check where the player was sent.
+    clientPointForTile: function (tileX, tileY) {
+      var m = metrics();
+      var rect = pre.getBoundingClientRect();
+      var center = tileCenterCell(tileX + 0.5, tileY + 0.5, camera, m.cols, m.rows);
+      var cellX = Math.round(center.x);
+      var cellY = Math.round(center.y);
+      return {
+        x: rect.left + (cellX + 0.5) * m.cellW,
+        y: rect.top + (cellY + 0.5) * m.cellH,
+        cell: [cellX, cellY]
+      };
+    },
     reseed: function (nextSeed) { loadSeed(typeof nextSeed === "number" ? nextSeed : randomSeed()); },
+    // Test plumbing: force a render without advancing the simulation, so the
+    // audit can prove that a static frame writes zero bytes to the DOM.
+    renderOnce: function () { render(1); },
     teleport: function (x, y) {
       sim.player.x = x;
       sim.player.y = y;
@@ -181,11 +206,13 @@ function boot() {
     debug: {
       errors: errors,
       hoveredTile: hoveredTile,
-      lastFrame: renderer.stats,
+      lastPresent: lastPresent,
+      renderStats: function () { return renderer.stats; },
+      worldStats: function () { return world.stats; },
       constants: {
         stepMs: FIXED_STEP_MS,
-        tileWidth: TILE_W,
-        tileHeight: TILE_H,
+        tileCells: [TILE_CELLS_W, TILE_CELLS_H],
+        targetRows: TARGET_ROWS,
         world: [sim.grid.width, sim.grid.height],
         walkableTiles: sim.grid.countWalkable(),
         entities: sim.entities.length

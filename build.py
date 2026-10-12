@@ -8,7 +8,6 @@ the only thing that ships: one file, no server, no bundler, no dependency.
 Usage: python3 build.py
 """
 
-import base64
 import hashlib
 import json
 import os
@@ -19,7 +18,7 @@ import tempfile
 BASE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(BASE, "src")
 OUT = os.path.join(BASE, "isoforge.html")
-ATLAS_PNG = os.path.join(BASE, "assets", "atlas.png")
+ART_JSON = os.path.join(BASE, "assets", "art.json")
 
 MODULES = [
     "core/rng.js",
@@ -27,13 +26,16 @@ MODULES = [
     "core/loop.js",
     "world/grid.js",
     "sim/sim.js",
-    "render/atlas.js",
-    "render/canvas_renderer.js",
+    "render/text_renderer.js",
+    "render/art.js",
+    "render/world_view.js",
     "ui/hud.js",
     "app.js",
 ]
 
-ATLAS_ANCHOR = "var ATLAS_DATA_URI = null;"
+# Phase 2 replaces the procedural shapes with templates sampled from the PIL
+# scene through the ship's pipeline; they travel as JSON through this anchor.
+ART_ANCHOR = "var ART_TEMPLATES = null;"
 MODULE_MARKER = "/*__MODULES__*/"
 STYLE_MARKER = "<!--__STYLE__-->"
 
@@ -55,25 +57,20 @@ def main():
         chunks.append("// ==== %s ====\n%s" % (module, read(path).rstrip() + "\n"))
     script = "\n".join(chunks)
 
-    # Atlas injection. Phase 2 writes assets/atlas.png; until then the engine
-    # bakes placeholder art in the browser and the anchor stays null.
-    if script.count(ATLAS_ANCHOR) != 1:
-        sys.exit("atlas anchor not found exactly once (%d)" % script.count(ATLAS_ANCHOR))
-    if os.path.exists(ATLAS_PNG):
-        with open(ATLAS_PNG, "rb") as handle:
-            raw = handle.read()
-        uri = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
-        script = script.replace(
-            ATLAS_ANCHOR,
-            "var ATLAS_DATA_URI = %s;" % json.dumps(uri),
-        )
-        atlas_state = "embedded %d KB png" % (len(raw) // 1024)
+    if script.count(ART_ANCHOR) != 1:
+        sys.exit("art anchor not found exactly once (%d)" % script.count(ART_ANCHOR))
+    if os.path.exists(ART_JSON):
+        with open(ART_JSON, encoding="utf-8") as handle:
+            payload = handle.read()
+        json.loads(payload)          # fail the build on malformed art
+        script = script.replace(ART_ANCHOR, "var ART_TEMPLATES = %s;" % payload)
+        art_state = "templates injected from assets/art.json (%d KB)" % (len(payload) // 1024)
     else:
         script = script.replace(
-            ATLAS_ANCHOR,
-            "var ATLAS_DATA_URI = (null);  // built: no assets/atlas.png yet (phase 2)",
+            ART_ANCHOR,
+            "var ART_TEMPLATES = (null);  // built: procedural art (no assets/art.json yet)",
         )
-        atlas_state = "placeholder art baked at boot (no assets/atlas.png)"
+        art_state = "procedural art in art.js (no assets/art.json)"
 
     if template.count(MODULE_MARKER) != 1 or template.count(STYLE_MARKER) != 1:
         sys.exit("template markers must appear exactly once")
@@ -81,11 +78,15 @@ def main():
     html = template.replace(STYLE_MARKER, "<style>\n%s\n</style>" % styles.rstrip())
     html = html.replace(MODULE_MARKER, script)
 
-    for marker in (MODULE_MARKER, STYLE_MARKER, ATLAS_ANCHOR):
+    for marker in (MODULE_MARKER, STYLE_MARKER, ART_ANCHOR):
         if marker in html:
             sys.exit("marker survived the build: %s" % marker)
     if html.count("</script>") != 1:
         sys.exit("expected exactly one closing script tag")
+    if "<canvas" in html:
+        sys.exit("the engine is text-only: no canvas allowed in the build")
+    if "data:image" in html:
+        sys.exit("the engine is text-only: no embedded image allowed in the build")
 
     # Syntax check before shipping: a syntax error inside the single file fails
     # silently in the browser and the page just stays blank.
@@ -107,7 +108,8 @@ def main():
     print("  size      : %.1f KB" % (len(html.encode("utf-8")) / 1024))
     print("  sha1      : %s" % digest)
     print("  modules   : %d" % len(MODULES))
-    print("  atlas     : %s" % atlas_state)
+    print("  art       : %s" % art_state)
+    print("  text-only : no canvas, no image")
     print("  script    : node --check ok")
 
 

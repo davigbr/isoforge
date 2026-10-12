@@ -278,56 +278,48 @@ function createHeadless() {
     return { steps: steps, seed: seed, startHash: start, endHash: end, closed: start === end };
   }
 
-  // Projection round trip over a spread of world points.
+  // Projection round trip over a spread of world points, in cell units.
   function projectionRoundTrip(samples) {
     var worst = 0;
     var rng = createRng(4242);
     for (var i = 0; i < samples; i++) {
       var x = rng() * 200 - 100;
       var y = rng() * 200 - 100;
-      var sx = worldToScreenX(x, y);
-      var sy = worldToScreenY(x, y);
-      var backX = screenToWorldX(sx, sy);
-      var backY = screenToWorldY(sx, sy);
+      var cx = worldToCellX(x, y);
+      var cy = worldToCellY(x, y);
+      var backX = cellToWorldX(cx, cy);
+      var backY = cellToWorldY(cx, cy);
       worst = Math.max(worst, Math.abs(backX - x), Math.abs(backY - y));
     }
     return { samples: samples, maxErrorTiles: worst };
   }
 
   // Culling: every tile whose diamond touches the viewport must be inside the
-  // iterated rectangle (no holes), and the rectangle is only the starting
-  // bound -- the renderer rejects the rest with an exact diamond test, which is
-  // measured live from the frame stats.
-  function culling(viewportW, viewportH, camX, camY) {
+  // iterated rectangle (no holes). The renderer then rejects the rest with the
+  // very same test, so the audit can compare the two counts for equality.
+  function culling(cols, rows, camX, camY) {
     var margin = 2;
-    var bounds = visibleTileBounds(camX, camY, viewportW, viewportH, margin);
-    var drawn = {};
+    var bounds = visibleTileBounds(camX, camY, cols, rows, margin);
+    var inside = {};
     var iteratedInWorld = 0;
     for (var ty = bounds.y0; ty <= bounds.y1; ty++) {
       for (var tx = bounds.x0; tx <= bounds.x1; tx++) {
         if (tx < 0 || ty < 0 || tx >= WORLD_WIDTH || ty >= WORLD_HEIGHT) continue;
-        drawn[tx + ":" + ty] = true;
+        inside[tx + ":" + ty] = true;
         iteratedInWorld++;
       }
     }
-    var halfW = HALF_TILE_W * RENDER_SCALE;
-    var halfH = HALF_TILE_H * RENDER_SCALE;
     var missing = [];
     var visibleCount = 0;
     for (var gy = 0; gy < WORLD_HEIGHT; gy++) {
       for (var gx = 0; gx < WORLD_WIDTH; gx++) {
-        var sx = worldToScreenX(gx + 0.5 - camX, gy + 0.5 - camY);
-        var sy = worldToScreenY(gx + 0.5 - camX, gy + 0.5 - camY);
-        var touches = sx + halfW > -viewportW / 2 && sx - halfW < viewportW / 2
-          && sy + halfH > -viewportH / 2 && sy - halfH < viewportH / 2;
-        if (!touches) continue;
+        if (!tileTouchesViewport(gx, gy, camX, camY, cols, rows)) continue;
         visibleCount++;
-        if (!drawn[gx + ":" + gy]) missing.push(gx + ":" + gy);
+        if (!inside[gx + ":" + gy]) missing.push(gx + ":" + gy);
       }
     }
     return {
-      viewport: { w: viewportW, h: viewportH },
-      renderScale: RENDER_SCALE,
+      viewport: { cols: cols, rows: rows },
       camera: { x: camX, y: camY },
       bounds: bounds,
       iteratedInWorld: iteratedInWorld,
