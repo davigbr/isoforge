@@ -1,6 +1,5 @@
 # Isoforge — motor isométrico 2:1 para browser: plano de implementação
 
-> **For Hermes:** usar a skill `subagent-driven-development` na execução: uma tarefa por vez, revisão de conformidade depois revisão de qualidade.
 
 **Goal:** um motor de jogos isométricos (projeção 2:1 fixa, câmera que **não** rotaciona a tela) que roda 100% offline no browser em tela cheia, com simulação determinística a 60 Hz, save em `localStorage`, arte gerada por script, e uma fatia jogável de ARPG que prova o motor.
 

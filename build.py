@@ -22,6 +22,7 @@ grows a canvas, an image, a network call or a module import.
 """
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -133,14 +134,36 @@ def build_engine():
     write(os.path.join(DIST, "isoforge.engine.js"), javascript)
     write(os.path.join(DIST, "isoforge.engine.css"), read(os.path.join(SRC, "engine.css")))
     write(os.path.join(DIST, "VERSION"), version + "\n")
+    # A release file with the hashes, so a game can tell a real release from a
+    # vendored copy somebody edited by hand: the version number alone does not
+    # prove the bytes are the ones the engine built.
+    release = {
+        "version": version,
+        "engine": hashlib.sha1(javascript.encode("utf-8")).hexdigest(),
+        "engine_bytes": len(javascript.encode("utf-8")),
+        "css": hashlib.sha1(read(os.path.join(SRC, "engine.css")).encode("utf-8")).hexdigest(),
+        "modules": MODULES,
+    }
+    write(os.path.join(DIST, "release.json"), json.dumps(release, indent=2) + "\n")
 
     check_syntax(javascript, "isoforge.engine.js")
     assert_clean(javascript, "isoforge.engine.js")
     print("built dist/isoforge.engine.js")
     print("  version   : %s" % version)
     print("  size      : %.1f KB" % (len(javascript.encode("utf-8")) / 1024))
-    print("  sha1      : %s" % hashlib.sha1(javascript.encode("utf-8")).hexdigest())
+    print("  sha1      : %s" % release["engine"])
     print("  modules   : %d" % len(MODULES))
+    print("  release   : dist/release.json (hashes, for the games to verify)")
+
+
+def release_hash():
+    """The hash of the engine release being inlined. Read from the manifest so the
+    banner and the manifest cannot disagree."""
+    path = os.path.join(DIST, "release.json")
+    if not os.path.exists(path):
+        sys.exit("dist/release.json ausente: rode o build do motor antes")
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)["engine"]
 
 
 def build_example(name):
@@ -156,7 +179,8 @@ def build_example(name):
         os.path.join(directory, "styles.css")) else ""
 
     assert_markers(template, ENGINE_MARKER, GAME_MARKER, STYLE_MARKER)
-    html = template.replace(STYLE_MARKER, "<style>\n%s\n%s\n</style>" % (engine_css.rstrip(), game_css.rstrip()))
+    banner = "<!-- engine: isoforge %s %s -->" % (engine_version(), release_hash())
+    html = template.replace(STYLE_MARKER, banner + "\n<style>\n%s\n%s\n</style>" % (engine_css.rstrip(), game_css.rstrip()))
     html = html.replace(ENGINE_MARKER, engine_js.rstrip())
     html = html.replace(GAME_MARKER, game_js.rstrip())
     for marker in (ENGINE_MARKER, GAME_MARKER, STYLE_MARKER):

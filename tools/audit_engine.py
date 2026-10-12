@@ -3,10 +3,10 @@
 asserts the engine's invariants. Game-specific rules live in the game's own audit
 (see the cripta project), which imports engine_checks() from this file.
 
-Run from the engine repo:
-  PYTHONPATH= ~/.hermes/hermes-agent/venv/bin/python3 tools/audit_engine.py
-  PYTHONPATH= ~/.hermes/hermes-agent/venv/bin/python3 tools/audit_engine.py \
-      --html /path/to/game.html --report /tmp/audit.json
+Run from the engine repo (needs Python 3 with Playwright and its Chromium):
+  python3 tools/audit_engine.py
+  python3 tools/audit_engine.py --html /path/to/game.html --report /tmp/audit.json
+  python3 tools/audit_engine.py --negative-control
 
   --negative-control  also proves the lattice check can FAIL, by building a copy
                       of the page with the camera snap disabled and asserting the
@@ -193,8 +193,12 @@ def engine_checks(page, html_path, report_png=None):
     page.evaluate("window.ISO.renderOnce()")
     second = data(page, "({rows: window.ISO.debug.renderStats().rebuiltRows, bytes: window.ISO.debug.renderStats().htmlBytes})")
     page.evaluate("window.ISO.loop.start()")
+    # The FIRST forced render flushes whatever changed since the last frame (entity
+    # rows, and the HUD, whose numbers refresh every few frames), so it is context,
+    # not the claim. The claim is the second one: a frame where nothing changed
+    # must write NOTHING.
     check("idle: a static frame rebuilds zero rows and writes zero bytes to the DOM",
-          second["rows"] == 0 and second["bytes"] == 0 and first["rows"] <= 3,
+          second["rows"] == 0 and second["bytes"] == 0,
           {"rows": second["rows"], "bytes": second["bytes"], "warmupRows": first["rows"]})
 
     # 6. walking: the grid must not be rebuilt per cell of camera travel ------
@@ -460,6 +464,47 @@ def engine_checks(page, html_path, report_png=None):
           (not copy["declared"]) or not copy["absent"],
           {"declared": copy["declared"], "keys": copy.get("keys", 0), "absent": copy.get("absent", {})})
 
+    # 10c. background: it has to be readable, not only writable -----------------
+    # A write-only background cannot be verified: nothing could prove that a HUD
+    # panel is opaque, or that the overlay stays transparent where it draws
+    # nothing. This is the round trip that keeps the accessor honest.
+    background = data(page, """(() => {
+      var ISO = window.ISO, m = ISO.metrics(), R = ISO.renderer;
+      var x = 3, y = m.rows - 6;
+      var before = R.backgroundAt(x, y);
+      R.plot(x, y, Isoforge.text.glyphIndex('='), 0xFF00FF, 0x001133);
+      R.present();
+      var readFg = R.colorAt(x, y), readBg = R.backgroundAt(x, y), glyph = R.glyphAt(x, y);
+      R.plot(x, y, Isoforge.text.spaceIndex, -1, -1);
+      R.present();
+      return {before: before, wroteFg: 0xFF00FF, readFg: readFg, wroteBg: 0x001133,
+              readBg: readBg, glyph: glyph, clearedBg: R.backgroundAt(x, y),
+              outside: R.backgroundAt(-bleedProbe(), -bleedProbe())};
+      function bleedProbe() { return 100000; }
+    })()""")
+    check("background: plot writes both colours and the accessors read them back (-1 = none)",
+          background["readFg"] == background["wroteFg"] and background["readBg"] == background["wroteBg"]
+          and background["clearedBg"] == -1 and background["outside"] == -3,
+          background)
+
+    # 10d. the HUD is an overlay: it must not hide the world --------------------
+    hud_bg = data(page, """(() => {
+      var ISO = window.ISO, m = ISO.metrics(), H = ISO.hudRenderer;
+      var space = Isoforge.text.spaceIndex;
+      var total = 0, opaque = 0, inked = 0;
+      for (var y = 0; y < m.rows; y++) {
+        for (var x = 0; x < m.cols; x++) {
+          total++;
+          if (H.backgroundAt(x, y) !== -1) opaque++;
+          if (H.glyphAt(x, y) !== space) inked++;
+        }
+      }
+      return {cells: total, opaque: opaque, inked: inked,
+              transparentShare: +((total - opaque) / total).toFixed(3)};
+    })()""")
+    check("HUD overlay: panels paint a background and the rest of the layer stays transparent",
+          hud_bg["opaque"] > 20 and hud_bg["transparentShare"] >= 0.6, hud_bg)
+
     # 11. layout: no scrollbar, grid covering the screen -----------------------
     page.set_viewport_size({"width": 1280, "height": 633})
     settle(page, 700)
@@ -496,6 +541,8 @@ def engine_checks(page, html_path, report_png=None):
           data(page, "window.ISO.debug.errors") == [] and CONSOLE_ERRORS == [],
           {"game": data(page, "window.ISO.debug.errors"), "browser": CONSOLE_ERRORS})
 
+    release_measurement = release_check(page, html_path)
+
     render = data(page, """({cols: window.ISO.metrics().cols, rows: window.ISO.metrics().rows,
       cells: window.ISO.metrics().cols * window.ISO.metrics().rows, fontPx: window.ISO.metrics().fontPx,
       spans: window.ISO.debug.renderStats().spans, htmlBytes: window.ISO.debug.renderStats().htmlBytes,
@@ -505,7 +552,7 @@ def engine_checks(page, html_path, report_png=None):
         "cullingCentre": centre, "cullingEdge": edge, "idle": idle_stats,
         "walking": {k: walking[k] for k in ("fps", "p95", "renderP95", "frames", "drops", "stutters")},
         "lattice": {"spreads": spreads, "cameraMoved": round(camera_span, 2)},
-        "scroll": steps, "art": {"rounds": len(rounds), "solidDiff": solid_diffs, "floorDiff": floor_diffs}, "hud": hud_probe, "world": world_probe,
+        "scroll": steps, "hudBackground": hud_bg, "release": release_measurement, "art": {"rounds": len(rounds), "solidDiff": solid_diffs, "floorDiff": floor_diffs}, "hud": hud_probe, "world": world_probe,
         "layoutDesktop": desktop, "layoutMobile": mobile, "render": render
     }
 
@@ -600,6 +647,33 @@ def negative_control(html_path, browser=None):
     check("negative control: with the frame lattice broken the grid DOES shimmer",
           len(values) > 1, {"verticalDistances": values, "samples": len(samples)})
     return {"broken": len(values) > 1, "values": values}
+
+
+def release_check(page, html_path):
+    """The delivered file must declare which engine release it carries, and the
+    declaration must match the release manifest. E2E on the artifact: a game can
+    vendor an engine that was edited by hand, and the version string alone would
+    not show it (the manifest has the hash)."""
+    html = open(html_path, encoding="utf-8").read()
+    banner = re.search(r"<!-- engine: (\S+) (\S+) ([0-9a-f]{40}) -->", html)
+    reported = data(page, "window.ISO.version")
+    manifest = None
+    for candidate in (os.path.join(os.path.dirname(html_path), "vendor", "release.json"),
+                      os.path.join(ROOT, "dist", "release.json"),
+                      os.path.join(ROOT, "release.json")):
+        if os.path.exists(candidate):
+            with open(candidate, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            break
+    detail = {
+        "banner": banner.group(0) if banner else None,
+        "engineInPage": reported,
+        "manifest": manifest["engine"] if manifest else "not found",
+    }
+    ok = (bool(banner) and banner.group(2) == reported
+          and (manifest is None or banner.group(3) == manifest["engine"]))
+    check("release: the file declares the engine release it carries, and it matches the manifest", ok, detail)
+    return detail
 
 
 def main():

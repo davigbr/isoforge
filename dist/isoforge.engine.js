@@ -1,4 +1,4 @@
-// Isoforge 0.3.0 -- 2:1 isometric, text-mode, deterministic, offline.
+// Isoforge 0.4.0 -- 2:1 isometric, text-mode, deterministic, offline.
 // Assembled from src/ by build.py. DO NOT EDIT: edit the modules and rebuild.
 var Isoforge = (function () {
 "use strict";
@@ -18,7 +18,7 @@ var Isoforge = (function () {
 // Everything derived is kept in plain module vars (recomputed by configure())
 // so the hot loops read a variable instead of walking an object.
 
-var ENGINE_VERSION = "0.3.0";
+var ENGINE_VERSION = "0.4.0";
 
 var EngineConfig = {
   tileCellsW: 10,          // width of one world tile, in character cells
@@ -711,6 +711,16 @@ function createTextRenderer(preElement, options) {
     if (bx < 0 || by < 0 || bx >= bufferCols || by >= bufferRows) return -3;
     return fg[by * bufferCols + bx];
   }
+  // Background read-back. Same convention as the other accessors: -1 means "no
+  // background" (the page shows through), -3 means "outside the buffer". Without
+  // this the background was write-only, so nothing could verify that a HUD panel
+  // is opaque or that the overlay stays transparent where it draws nothing.
+  function backgroundAt(x, y) {
+    var bx = x + bleed;
+    var by = y + bleed;
+    if (bx < 0 || by < 0 || bx >= bufferCols || by >= bufferRows) return -3;
+    return bg[by * bufferCols + bx];
+  }
 
   function textAt(x, y, string, color, background) {
     for (var i = 0; i < string.length; i++) {
@@ -890,6 +900,7 @@ function createTextRenderer(preElement, options) {
     text: textAt,
     glyphAt: glyphAt,
     colorAt: colorAt,
+    backgroundAt: backgroundAt,
     // The visible window only, so callers (and the audit) see what the player sees.
     gridText: function () {
       var out = [];

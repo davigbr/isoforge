@@ -1,2 +1,5 @@
 isoforge.html
 reports/
+.build-probe.js
+__pycache__/
+*.pyc

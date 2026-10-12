@@ -1,0 +1,20 @@
+{
+  "version": "0.4.0",
+  "engine": "5f56f9d616f772f6e796aaf8d6bca061763516e4",
+  "engine_bytes": 65338,
+  "css": "0ad9bd3cad17b8f730b665e37294c0860deef53c",
+  "modules": [
+    "core/config.js",
+    "core/rng.js",
+    "core/iso.js",
+    "core/loop.js",
+    "core/persist.js",
+    "render/text_renderer.js",
+    "render/world_view.js",
+    "sim/grid.js",
+    "sim/actor.js",
+    "sim/headless.js",
+    "ui/hud.js",
+    "engine.js"
+  ]
+}
