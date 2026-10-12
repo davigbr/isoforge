@@ -1,5 +1,6 @@
-/* Isoforge — texto puro. A página é um terminal: um <pre>, fundo quase preto,
-   nada de imagem ou canvas. A cor vem por célula, do renderizador. */
+/* Isoforge -- pure text. The page is a terminal: one <pre>, near black
+   background, no image and no canvas anywhere. Colour comes per cell, from the
+   renderer. */
 
 html, body {
   margin: 0;

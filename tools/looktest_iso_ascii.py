@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Look test: uma cripta isométrica amostrada para grade de caracteres em duas
-escalas de tile, usando o MESMO pipeline do navio pirata (PIL em supersampling
-4x -> média de área -> caractere pela luminância com gama 1.9 -> cor por célula).
+"""Look test: an isometric crypt sampled down to a character grid at two tile
+scales, through the SAME pipeline as the pirate ship (PIL supersampled 4x ->
+area average -> character by luminance with gamma 1.9 -> colour per cell).
 
-Serve para escolher a geometria do tile antes de escrever o motor: a grade é
-idêntica nas duas variantes (214x69 células), só muda quantas células 1 tile
-ocupa na tela.
+It exists to choose the tile geometry before writing the engine: the grid is
+identical in both variants (214x69 cells); only the number of cells one tile
+occupies changes.
 
-Uso: /usr/bin/python3 tools/looktest_iso_ascii.py
+Run: PYTHONPATH= /usr/bin/python3 tools/looktest_iso_ascii.py
 """
 
 import math
@@ -19,12 +19,12 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(HERE, "looktest-iso-ascii.html")
 
-# --- métricas medidas no browser (font-size 11px, SF Mono) -------------------
+# --- metrics measured in the browser (font-size 11px, SF Mono) ----------------
 CELL_W, CELL_H = 6.62, 11.0
 COLS, ROWS = 214, 69
 SS = 4                      # supersampling
 
-# --- rampa e curva do navio (ship.py) ---------------------------------------
+# --- ramp and curve from the ship (ship.py) ----------------------------------
 RAMP = " .'-:_,^=;><+!rc*/z?sLTv)J7(|Fi{C}fI31tlu[neoZ5Yxjya]2ESwqkP6h9d4VpOGbUAKXHm8RD#$Bg0MNWQ%&@"
 GAMMA = 1.9
 QUANT = 4
@@ -45,7 +45,7 @@ CREATURE = (56, 72, 56)
 EYE = (236, 96, 64)
 FIRE = (255, 168, 72)
 IRON = (72, 74, 80)
-PICK_FLOOR = None           # decidido por variante
+PICK_FLOOR = None           # decided per variant
 
 
 def lum(c):
@@ -71,7 +71,7 @@ def glyph(c):
     return RAMP[k]
 
 
-# --- mundo -------------------------------------------------------------------
+# --- world -------------------------------------------------------------------
 def build_world(seed=20261012):
     rng = random.Random(seed)
     solid = [[True] * WORLD_W for _ in range(WORLD_H)]
@@ -80,7 +80,7 @@ def build_world(seed=20261012):
     tint = [[0.0] * WORLD_W for _ in range(WORLD_H)]
     variant = [[0] * WORLD_W for _ in range(WORLD_H)]
 
-    # sala principal + dois corredores + uma câmara
+    # main hall + two corridors + one chamber
     rooms = [(8, 5, 24, 16), (2, 9, 10, 15), (24, 2, 38, 9), (30, 12, 39, 22)]
     for (x0, y0, x1, y1) in rooms:
         for y in range(y0, y1):
@@ -98,7 +98,7 @@ def build_world(seed=20261012):
                 continue
             variant[y][x] = (x * 7 + y * 13) % len(FLOOR)
             tint[y][x] = rng.uniform(0.82, 1.12)
-            # tocha em duas paredes, poça, ossada
+            # torch on two walls, pool, bones
             if (x, y) in ((12, 6), (26, 14), (33, 10)):
                 kind[y][x] = "torch"
             elif (x, y) in ((16, 12), (22, 8)):
@@ -107,7 +107,7 @@ def build_world(seed=20261012):
                 kind[y][x] = "bones"
             elif (x, y) in ((11, 14), (12, 14), (11, 15)):
                 kind[y][x] = "pool"
-    # pilares
+    # pillars
     for (px, py) in ((14, 8), (18, 8), (14, 14), (18, 14), (34, 6), (34, 16)):
         if floor[py][px]:
             kind[py][px] = "pillar"
@@ -180,7 +180,7 @@ def draw_scene(tile_cells_w, tile_cells_h, world, seed=7):
                     c = BONE if kind == "bones" else (86, 80, 68)
                     d.ellipse([px - 1.6, py - 1.2, px + 1.6, py + 1.2], fill=c)
 
-            # parede: tudo que faz fronteira com piso vira bloco no vizinho
+            # wall: everything bordering a floor becomes a block next door
             for (nx, ny) in ((tx + 1, ty), (tx, ty + 1)):
                 if nx < WORLD_W and ny < WORLD_H and not world["floor"][ny][nx]:
                     wx, wy = iso(nx, ny, tw, th, ox, oy)
@@ -233,7 +233,7 @@ def draw_scene(tile_cells_w, tile_cells_h, world, seed=7):
                 d.ellipse([fx - fw * 0.42 - e, fy - fh * 0.95 - e, fx - fw * 0.42 + e, fy - fh * 0.95 + e], fill=EYE)
                 d.ellipse([fx + fw * 0.42 - e, fy - fh * 0.95 - e, fx + fw * 0.42 + e, fy - fh * 0.95 + e], fill=EYE)
 
-    # vinheta: escurece as bordas para o olho ir ao centro
+    # vignette: darken the edges so the eye goes to the centre
     mask = Image.new("L", (W, H), 0)
     md = ImageDraw.Draw(mask)
     md.ellipse([-W * 0.25, -H * 0.35, W * 1.25, H * 1.35], fill=255)
@@ -350,7 +350,7 @@ def main():
         fh.write(page)
     print("escrito %s (%.0f KB)" % (OUT, os.path.getsize(OUT) / 1024.0))
     for (tw, th, seen, ink) in stats:
-        print("  tile %dx%d células: %d cores, %d glifos com tinta" % (tw, th, seen, ink))
+        print("  tile %dx%d cells: %d colours, %d inked glyphs" % (tw, th, seen, ink))
 
 
 if __name__ == "__main__":

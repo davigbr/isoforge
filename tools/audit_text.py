@@ -98,52 +98,52 @@ def run(page):
 
     # 1. boot ---------------------------------------------------------------
     boot = data(page, "({mode: window.ISO.mode, visible: document.visibilityState, errors: window.ISO.debug.errors, constants: window.ISO.debug.constants})")
-    check("boot: motor em modo texto, sem erro", boot["mode"] == "text" and boot["errors"] == [], boot["errors"])
-    check("boot: aba visível (rAF não suspenso)", boot["visible"] == "visible", boot["visible"])
+    check("boot: text engine mode, no errors", boot["mode"] == "text" and boot["errors"] == [], boot["errors"])
+    check("boot: tab visible (rAF not suspended)", boot["visible"] == "visible", boot["visible"])
     tag = data(page, "({tag: document.getElementById('screen').tagName, children: document.getElementById('screen').children.length})")
-    check("boot: a tela é um <pre>", tag["tag"] == "PRE", tag)
+    check("boot: the screen is a <pre>", tag["tag"] == "PRE", tag)
 
-    # 2. o arquivo entregue não tem imagem nem canvas ------------------------
+    # 2. the shipped file carries no image and no canvas ------------------------
     with open(BUILT, encoding="utf-8") as handle:
         html = handle.read()
-    check("arquivo único: sem <canvas>, sem data:image, sem http", 
+    check("single file: no <canvas>, no data:image, no http", 
           "<canvas" not in html and "data:image" not in html and "http://" not in html and "https://" not in html,
           {"kb": round(len(html.encode()) / 1024, 1)})
 
-    # 3. projeção e determinismo (inalterados pelo pivô) ---------------------
-    check("projeção 2:1 ida-e-volta < 0,001 tile",
+    # 3. projection and determinism (unchanged by the pivot) ---------------------
+    check("2:1 projection round trip < 0.001 tile",
           data(page, "window.ISO.headless.projectionRoundTrip(2000)")["maxErrorTiles"] < 0.001, "2000 amostras")
     determinism = data(page, "window.ISO.headless.determinism(1234, 600)")
-    check("mesma semente + mesma entrada = mesmo hash (600 passos, 2 execuções)",
+    check("same seed + same input = same hash (600 steps, 2 runs)",
           determinism["identical"] and determinism["firstHash"] != determinism["finalHash"], determinism["finalHash"])
     closure = data(page, "window.ISO.headless.loopClosure(1234, 600)")
-    check("emenda: passo 600 ≡ passo 0", closure["closed"], closure)
+    check("loop closure: step 600 == step 0", closure["closed"], closure)
 
-    # 4. culling em células --------------------------------------------------
+    # 4. culling, in cells --------------------------------------------------
     center = culling_row(page, (32.5, 32.5))
-    check("culling centro: tiles desenhados == tiles que tocam a tela",
+    check("culling centre: tiles drawn == tiles touching the screen",
           center["diff"] == 0 and center["missingTiles"] == 0, center)
     edge = culling_row(page, (4.5, 4.5))
-    check("culling borda do mundo: sem furo na tela",
+    check("culling world edge: no hole on screen",
           edge["diff"] == 0 and edge["missingTiles"] == 0, edge)
 
-    # 5. custo de quadro e de escrita no DOM --------------------------------
+    # 5. frame cost and DOM writes --------------------------------
     page.evaluate("window.ISO.teleport(32.5, 32.5)")
     page.wait_for_timeout(600)
     page.evaluate("window.ISO.loop.stats.frames = 0")
     page.wait_for_timeout(6000)
     stats = data(page, "window.ISO.loop.stats")
     render = data(page, "window.ISO.debug.renderStats()")
-    check("60 fps: p95 de quadro <= 25 ms (piso pedido: 30 fps)",
+    check("60 fps: frame p95 <= 25 ms (requested floor: 30 fps)",
           stats["p95"] <= 25.0, {"fps": round(stats["fps"], 1), "p50": round(stats["p50"], 2), "p95": round(stats["p95"], 2)})
     check("custo de render p95 <= 8 ms", stats["renderP95"] <= RENDER_BUDGET_MS,
           {"renderP95": round(stats["renderP95"], 3), "present": round(stats["presentMs"], 3)})
-    check("rodando, o redesenho é parcial (só as linhas com movimento)",
+    check("while running the redraw is partial (only rows with movement)",
           render["rebuiltRows"] < render["rows"] and render["htmlBytes"] < render["gridBytes"],
           {"rebuiltRows": render["rebuiltRows"], "rows": render["rows"],
            "kbEscritos": round(render["htmlBytes"] / 1024), "kbGrade": round(render["gridBytes"] / 1024)})
 
-    # parado de verdade (loop parado, render forçado): zero bytes no DOM
+    # truly idle (loop stopped, render forced): zero bytes written to the DOM
     page.evaluate("window.ISO.loop.stop()")
     page.wait_for_timeout(200)
     page.evaluate("window.ISO.renderOnce()")
@@ -155,12 +155,12 @@ def run(page):
       return {rows: after.rows, rebuiltRows: after.rebuiltRows, bytes: after.htmlBytes,
               firstBytes: before.htmlBytes, cells: after.cells};
     })()""")
-    check("parado: zero linhas reconstruídas e zero bytes escritos no DOM",
+    check("idle: zero rows rebuilt and zero bytes written to the DOM",
           frozen["rebuiltRows"] == 0 and frozen["bytes"] == 0, frozen)
     page.evaluate("window.ISO.loop.start()")
     page.wait_for_timeout(300)
 
-    # Pior caso: a câmera anda, então todas as linhas mudam a cada quadro.
+    # Worst case: the camera scrolls, so rows change every frame.
     # The player must start in a verified corridor NEAR THE CENTRE of the map:
     # at the border the camera is clamped, so walking does not scroll the grid
     # and this would measure a standing-still frame (0 rows rebuilt).
@@ -190,20 +190,20 @@ def run(page):
     page.wait_for_timeout(300)
     walked_tiles = ((walking["pos"][0] - walk_start["x"]) ** 2 + (walking["pos"][1] - walk_start["y"]) ** 2) ** 0.5
     camera_moved = ((walking["cam"][0] - walk_start["cam"][0]) ** 2 + (walking["cam"][1] - walk_start["cam"][1]) ** 2) ** 0.5
-    check("andando (câmera rolando): 60 fps, p95 <= 25 ms e escrita proporcional ao que mudou na tela",
+    check("walking (camera scrolling): 60 fps, p95 <= 25 ms, bytes written proportional to what changed",
           walking["p95"] <= 25.0 and walking["fps"] >= 45
           and walked_tiles >= 3 and camera_moved >= 1
           and walking["stats"]["rebuiltRows"] >= 3
           and walking["stats"]["htmlBytes"] < walking["stats"]["gridBytes"] * 0.5,
           {"fps": round(walking["fps"], 1), "p50": round(walking["p50"], 2), "p95": round(walking["p95"], 2),
            "renderP95": round(walking["renderP95"], 2),
-           "andou": round(walked_tiles, 1), "cameraAndou": round(camera_moved, 1),
-           "kbPorQuadro": "%.0f de %.0f" % (walking["stats"]["htmlBytes"] / 1024, walking["stats"]["gridBytes"] / 1024),
-           "linhas": "%d/%d" % (walking["stats"]["rebuiltRows"], walking["stats"]["rows"])})
-    check("pior caso: o custo de render fica dentro do orçamento de 8 ms",
+           "walked": round(walked_tiles, 1), "cameraMoved": round(camera_moved, 1),
+           "kbPerFrame": "%.0f of %.0f" % (walking["stats"]["htmlBytes"] / 1024, walking["stats"]["gridBytes"] / 1024),
+           "rows": "%d/%d" % (walking["stats"]["rebuiltRows"], walking["stats"]["rows"])})
+    check("worst case: render cost stays inside the 8 ms budget",
           walking["renderP95"] <= RENDER_BUDGET_MS, {"renderP95": round(walking["renderP95"], 3)})
 
-    # 6. teclado: direção pura na tela e velocidade exata --------------------
+    # 6. keyboard: screen-pure direction and exact speed --------------------
     page.evaluate("window.ISO.teleport(%f, %f)" % (corridor["x"], corridor["y"]))
     page.wait_for_timeout(300)
     before = data(page, "({x: window.ISO.sim.player.x, y: window.ISO.sim.player.y, tick: window.ISO.sim.getTick()})")
@@ -217,13 +217,13 @@ def run(page):
     tolerance = 0.02 * expected + 2 * PLAYER_SPEED * FIXED_STEP
     screen_dx = (after["x"] - after["y"]) - (before["x"] - before["y"])
     screen_dy = (after["x"] + after["y"]) - (before["x"] + before["y"])
-    check("tecla D anda para a direita na tela, sem deriva vertical",
+    check("key D walks screen-right with no vertical drift",
           screen_dx > 0 and abs(screen_dy) < 0.05, {"screenDx": round(screen_dx, 3), "screenDy": round(screen_dy, 3)})
-    check("velocidade exata: 4,2 tiles/s (tolerância = 2% + 2 tiques)",
+    check("exact speed: 4.2 tiles/s (tolerance = 2% + 2 ticks)",
           expected > 0 and abs(travel - expected) <= tolerance,
           {"travel": round(travel, 3), "expected": round(expected, 3), "ticks": ticks})
 
-    # 7. parede --------------------------------------------------------------
+    # 7. wall --------------------------------------------------------------
     spot = data(page, """(() => {
       var g = window.ISO.grid;
       for (var ty = 1; ty < g.height - 2; ty++) for (var tx = 1; tx < g.width - 2; tx++) {
@@ -246,10 +246,10 @@ def run(page):
                     && g.isWalkableAt(p.x - 0.3, p.y + 0.3) && g.isWalkableAt(p.x + 0.3, p.y + 0.3),
               insideWall: tile[0] === %d && tile[1] === %d};
     })()""" % (spot["wall"][0], spot["wall"][1]))
-    check("parede: empurrar não coloca o jogador dentro do bloco",
+    check("wall: pushing does not put the player inside the block",
           wall["walkable"] and wall["corners"] and not wall["insideWall"], {"end": wall["tile"]})
 
-    # 8. clique: a célula clicada vira o tile do destino ----------------------
+    # 8. click: the clicked cell becomes the destination tile ----------------------
     page.evaluate("window.ISO.teleport(32.5, 32.5)")
     page.wait_for_timeout(500)
     target_tile = data(page, """(() => {
@@ -267,15 +267,15 @@ def run(page):
     page.wait_for_timeout(1200)
     walked = data(page, "({x: window.ISO.sim.player.x, y: window.ISO.sim.player.y})")
     hit_tile = [int(sent["tx"] or -1), int(sent["ty"] or -1)]
-    check("clique: a célula clicada corresponde ao tile do destino (projeção inversa exata)",
+    check("click: the clicked cell maps to the destination tile (exact inverse projection)",
           hit_tile == [target_tile["x"], target_tile["y"]],
           {"clickedCell": point["cell"], "wanted": [target_tile["x"], target_tile["y"]], "target": hit_tile})
     distance_before = ((sent["tx"] - sent["x"]) ** 2 + (sent["ty"] - sent["y"]) ** 2) ** 0.5
     distance_after = ((sent["tx"] - walked["x"]) ** 2 + (sent["ty"] - walked["y"]) ** 2) ** 0.5
-    check("clique: o jogador caminha até o destino",
+    check("click: the player walks to the destination",
           distance_after < distance_before - 2, {"before": round(distance_before, 2), "after": round(distance_after, 2)})
 
-    # 9. HUD é texto desenhado na mesma grade --------------------------------
+    # 9. the HUD is text drawn into the same grid --------------------------------
     hud_probe = data(page, """(() => {
       var grid = window.ISO.gridText().split("\\n");
       var box = 0, inked = 0, total = 0;
@@ -292,45 +292,45 @@ def run(page):
               distinct: Object.keys(glyphs).length,
               hasTitle: grid[1].indexOf("isoforge") >= 0};
     })()""")
-    check("HUD em texto: moldura de box-drawing e título na grade",
+    check("text HUD: box-drawing frame and title in the grid",
           hud_probe["boxGlyphs"] > 20 and hud_probe["hasTitle"], hud_probe)
-    check("arte: grade com tinta suficiente e variedade de glifos",
+    check("art: enough ink and glyph variety in the grid",
           hud_probe["inked"] > hud_probe["rows"] * hud_probe["cols"] * 0.15 and hud_probe["distinct"] > 25,
           {"inked": hud_probe["inked"], "cells": hud_probe["rows"] * hud_probe["cols"], "distinct": hud_probe["distinct"]})
 
-    # 9b. a paleta precisa ser clara o bastante: um glifo cobre só parte da célula,
-    # então cor escura de tinta = tela quase preta (medido: p90 de luminância 30).
+    # 9b. the palette must be bright enough: a glyph covers only part of its cell,
+    # so dark ink means an almost black screen (measured: p90 luminance of 30).
     palette = data(page, """(() => {
       function lum(c) { return Math.round(0.2126 * ((c >> 16) & 255) + 0.7152 * ((c >> 8) & 255) + 0.0722 * (c & 255)); }
       return {floor: lum(PALETTE.floor[0]), wallTop: lum(PALETTE.wallTop), wallLeft: lum(PALETTE.wallLeft),
               hero: lum(PALETTE.heroCloak), gold: lum(PALETTE.gold), panelLine: lum(PALETTE.panelLine),
               bone: lum(PALETTE.bone2)};
     })()""")
-    check("paleta: tinta clara o suficiente para ler em arte de texto",
+    check("palette: ink bright enough to read in text art",
           palette["floor"] >= 70 and palette["wallTop"] >= 110 and palette["wallLeft"] >= 60
           and palette["gold"] >= 120 and palette["bone"] >= 150, palette)
 
-    # 10. layout: nada de barra de rolagem, grade preenchendo a tela ---------
+    # 10. layout: no scrollbar, grid filling the screen ---------
     desktop = layout(page)
-    check("layout 1280x633: sem barra de rolagem e grade cobrindo a tela",
+    check("layout 1280x633: no scrollbar and the grid covers the screen",
           desktop["overflowX"] == 0 and desktop["overflowY"] == 0
           and desktop["coverageX"] > 0.9 and desktop["coverageY"] > 0.9, desktop)
 
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(700)
     mobile = layout(page)
-    check("layout 390x844: sem barra de rolagem",
+    check("layout 390x844: no scrollbar",
           mobile["overflowX"] == 0 and mobile["overflowY"] == 0 and mobile["coverageY"] > 0.9, mobile)
     mobile_cull = data(page, """({drawn: window.ISO.world.stats.tilesDrawn + window.ISO.world.stats.blocksDrawn,
         visible: window.ISO.headless.culling(window.ISO.metrics().cols, window.ISO.metrics().rows,
                  window.ISO.camera.x, window.ISO.camera.y).visibleTiles})""")
-    check("layout 390x844: culling continua exato", mobile_cull["drawn"] == mobile_cull["visible"], mobile_cull)
+    check("layout 390x844: culling still exact", mobile_cull["drawn"] == mobile_cull["visible"], mobile_cull)
 
     page.set_viewport_size({"width": 1440, "height": 900})
     page.wait_for_timeout(900)
     page.screenshot(path=REPORT_PNG)
 
-    check("console e window.onerror limpos",
+    check("console and window.onerror clean",
           data(page, "window.ISO.debug.errors") == [] and CONSOLE_ERRORS == [],
           {"iso": data(page, "window.ISO.debug.errors"), "page": CONSOLE_ERRORS})
 
@@ -360,10 +360,10 @@ def main():
     with open(REPORT_JSON, "w", encoding="utf-8") as handle:
         json.dump({"passed": passed, "failed": len(failed), "checks": CHECKS, "measurements": detail},
                   handle, indent=2, ensure_ascii=False)
-    print("\n%d/%d verificações passaram" % (passed, len(CHECKS)))
-    print("relatório: %s" % REPORT_JSON)
+    print("\n%d/%d checks passed" % (passed, len(CHECKS)))
+    print("report: %s" % REPORT_JSON)
     for item in failed:
-        print("  FALHA: %s" % item["check"])
+        print("  FAILED: %s" % item["check"])
     return 1 if failed else 0
 
 

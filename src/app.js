@@ -130,7 +130,7 @@ function boot() {
       seed: String(sim.seed),
       stateHash: sim.stateHash(false),
       mouseTile: hoveredTile.inside
-        ? hoveredTile.x + "," + hoveredTile.y + (hoveredTile.walkable ? "" : " parede")
+        ? hoveredTile.x + "," + hoveredTile.y + (hoveredTile.walkable ? "" : HUD_TEXT.wallSuffix)
         : "—",
       playerTile: Math.floor(sim.player.x) + "," + Math.floor(sim.player.y),
       gridText: m.cols + "×" + m.rows,
@@ -142,7 +142,7 @@ function boot() {
       culled: String(world.stats.culled),
       tilesText: world.stats.tilesDrawn + "+" + world.stats.blocksDrawn,
       worldText: sim.grid.width + "×" + sim.grid.height,
-      moveMode: sim.player.targetX !== null ? "clique" : "teclado"
+      moveMode: sim.player.targetX !== null ? HUD_TEXT.moveClick : HUD_TEXT.moveKeys
     });
 
     lastPresent = renderer.present();
