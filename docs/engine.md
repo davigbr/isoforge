@@ -113,7 +113,9 @@ geometria (`diamondHalfW`, `diamondHalfH`, `wallHeightCells`, `latticeBleed`).
 ### `grid` — o mundo
 `createGrid(w, h)` devolve `{ width, height, walkable, isWalkableAt,
 isWalkableTile, setWalkable, floorVariant, countWalkable }`.
-`solidBorder(grid)` · `keepLargestRegion(grid)` · `findOpenCell(grid, rng)`.
+`solidBorder(grid)` · `keepLargestRegion(grid)` · `findOpenCell(grid, rng)` ·
+`findOpenCellNear(grid, cx, cy, folga)` (busca em anéis a partir de um ponto — é o
+que um spawn quer, para não nascer fora da faixa que a câmera pode percorrer).
 O gerador (caverna, salas, arena) é do jogo: o motor não sabe que mundo é este.
 
 ### `loop` — passo fixo
@@ -188,9 +190,12 @@ a resolução do save) · `clamp(v, lo, hi)`.
     lado, e a mesma pergunta dá sempre a mesma rota (impressão digital no relatório);
 17. rota atrás de parede: a auditoria **primeiro acha** um destino cuja linha reta
     está bloqueada (senão a prova seria vazia) e depois dirige o ator só pelo
-    contrato até lá, amostrando a cada tique que ele nunca está dentro da parede.
+    contrato até lá, amostrando a cada tique que ele nunca está dentro da parede;
+18. câmera: partindo do **spawn** (não do meio do mundo, que esconde o defeito), o
+    ator anda uma rota real em cada eixo e a câmera tem de acompanhar — o que exige
+    que o spawn esteja dentro da faixa de clamp e que o mundo dê folga à vista.
 
-São **35 checagens** no jogo de exemplo (46 na cripta, contando as do jogo).
+São **36 checagens** no jogo de exemplo (49 na cripta, contando as do jogo).
 
 `--negative-control` quebra a malha numa cópia da página e exige que a checagem
 9 **falhe** ali. Um teste que nunca falhou não prova nada.
@@ -229,6 +234,14 @@ Cada uma custou uma rodada de investigação; estão aqui para não custarem de 
 - **Um teste de rota só prova algo se o destino estiver atrás de parede.** A
   auditoria procura um destino com linha reta bloqueada e só então dirige; num
   mundo sem paredes ela falha alto em vez de passar em silêncio.
+- **Um spawn aleatório pode nascer fora da faixa da câmera.** A faixa em que a
+  câmera pode andar é `mundo − vista`: num mundo 64×64 com vista de 46 tiles ela tem
+  17,8 tiles por eixo, e o spawn sorteado caiu fora dela — a tela travava no limite e
+  parecia ter parado de acompanhar o jogador (relato de quem jogou). Nasça perto do
+  **centro** (`findOpenCellNear`), que está sempre dentro da faixa quando ela existe.
+- **Testar a câmera a partir do centro do mundo esconde esse defeito**: passou no
+  mundo que tinha o bug. O teste tem de partir de onde o jogo põe o jogador, e a folga
+  exigida tem de ser derivada da vista (metade dela), não um número solto de tiles.
 - **`PYTHONPATH` no ambiente Hermes aponta para `site-packages` de outro Python** e
   quebra `playwright`/`PIL` em venv: rode `PYTHONPATH= /venv/bin/python3 script.py`.
 - **Caractere sem glifo vira espaço em silêncio.** O conjunto de glifos precisa

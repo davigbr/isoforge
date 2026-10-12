@@ -141,7 +141,8 @@ def engine_checks(page, html_path, report_png=None):
     # 1. boot and the contract ------------------------------------------------
     boot = data(page, """({mode: window.ISO.mode, version: window.ISO.version,
       visible: document.visibilityState, errors: window.ISO.debug.errors,
-      missing: window.ISO.contract(), constants: window.ISO.debug.constants})""")
+      missing: window.ISO.contract(), constants: window.ISO.debug.constants,
+      spawn: window.ISO.actorPosition(), spawnCam: [window.ISO.camera.x, window.ISO.camera.y]})""")
     check("boot: the game satisfies the engine contract", boot["missing"] == [], {"missing": boot["missing"]})
     check("boot: text mode, engine version reported, no boot errors",
           boot["mode"] == "text" and isinstance(boot["version"], str) and boot["errors"] == [],
@@ -579,6 +580,66 @@ def engine_checks(page, html_path, report_png=None):
         check("pathfinding: the actor is never inside a wall on the way (sampled every tick)",
               drive["insideWall"] == 0, {"samples": drive["ticks"], "insideWall": drive["insideWall"]})
 
+    # 10f. the camera follows the actor in BOTH axes, FROM THE SPAWN ----------
+    # The hole a player found by walking around: the crypt's world was barely bigger
+    # than the view, so the camera's clamp pinned it and the screen looked like it had
+    # stopped following. Two ways to test this badly, both rejected: measuring from
+    # the middle of the world passes even when the spawn sits outside the camera's
+    # band (measured: it passed on the 64x64 world that had the bug), and requiring
+    # "some room" with a threshold of a few tiles is too lax to bite. So: start from
+    # the SPAWN, drive a real route, and demand the camera keeps up.
+    follow = data(page, """(() => {
+      var ISO = window.ISO, g = ISO.grid, P = Isoforge.path;
+      var spawn = %s;
+      var half = Isoforge.iso.viewHalfExtents(ISO.metrics().cols, ISO.metrics().rows);
+      var band = {x: [half.x, g.width - half.x], y: [half.y, g.height - half.y]};
+      function axisTest(axis) {
+        // Back to where the game put the player: that is the view the player sees
+        // in the first seconds, and where the clamp either lets the camera follow
+        // or does not.
+        ISO.teleport(spawn.x, spawn.y);
+        ISO.stepScene({});
+        var start = ISO.actorPosition();
+        var want = null;
+        for (var d = 8; d <= 24 && !want; d++) {
+          var tx = Math.floor(spawn.x) + (axis === 0 ? d : 0);
+          var ty = Math.floor(spawn.y) + (axis === 1 ? d : 0);
+          if (tx < 1 || ty < 1 || tx >= g.width - 1 || ty >= g.height - 1) continue;
+          if (!g.isWalkableTile(tx, ty)) continue;
+          var route = P.find(g, start.x, start.y, tx + 0.5, ty + 0.5, {smooth: false});
+          if (route.found && route.tiles >= 8) want = {x: tx + 0.5, y: ty + 0.5, tiles: route.tiles};
+        }
+        if (!want) return {found: false, axis: axis};
+        var cam0 = {x: ISO.camera.x, y: ISO.camera.y};
+        ISO.setDestination(want.x, want.y);
+        for (var i = 0; i < 1200; i++) {
+          ISO.stepScene({});
+          var p = ISO.actorPosition();
+          if (Math.sqrt((p.x - want.x) * (p.x - want.x) + (p.y - want.y) * (p.y - want.y)) <= 0.6) break;
+        }
+        var end = ISO.actorPosition();
+        var cam1 = {x: ISO.camera.x, y: ISO.camera.y};
+        return {found: true, axis: axis, routeTiles: want.tiles,
+                playerMoved: +((axis === 0 ? end.x - start.x : end.y - start.y)).toFixed(2),
+                cameraMoved: +((axis === 0 ? cam1.x - cam0.x : cam1.y - cam0.y)).toFixed(2),
+                gapAtEnd: +Math.sqrt((cam1.x - end.x) * (cam1.x - end.x)
+                       + (cam1.y - end.y) * (cam1.y - end.y)).toFixed(2)};
+      }
+      function kept(r) {
+        return r.found && Math.abs(r.playerMoved) > 3
+            && Math.abs(r.cameraMoved) > 0.6 * Math.abs(r.playerMoved);
+      }
+      var alongX = axisTest(0), alongY = axisTest(1);
+      return {spawn: [+spawn.x.toFixed(2), +spawn.y.toFixed(2)],
+              band: {x: [+band.x[0].toFixed(1), +band.x[1].toFixed(1)],
+                     y: [+band.y[0].toFixed(1), +band.y[1].toFixed(1)]},
+              spawnInsideBand: spawn.x >= band.x[0] && spawn.x <= band.x[1]
+                            && spawn.y >= band.y[0] && spawn.y <= band.y[1],
+              alongX: alongX, alongY: alongY, okX: kept(alongX), okY: kept(alongY)};
+    })()""" % json.dumps(boot["spawn"]))
+    check("camera: follows the actor in both axes from the spawn (the world gives it room)",
+          follow["okX"] and follow["okY"], follow)
+
     # 11. layout: no scrollbar, grid covering the screen -----------------------
     page.set_viewport_size({"width": 1280, "height": 633})
     settle(page, 700)
@@ -628,6 +689,8 @@ def engine_checks(page, html_path, report_png=None):
         "lattice": {"spreads": spreads, "cameraMoved": round(camera_span, 2)},
         "scroll": steps, "hudBackground": hud_bg, "release": release_measurement, "art": {"rounds": len(rounds), "solidDiff": solid_diffs, "floorDiff": floor_diffs}, "hud": hud_probe, "world": world_probe,
         "paths": {"routes": routes, "hidden": hidden, "drive": (drive if hidden["target"] is not None else None)},
+        "camera": follow,
+        "spawn": {"actor": boot["spawn"], "camera": boot["spawnCam"]},
         "layoutDesktop": desktop, "layoutMobile": mobile, "render": render
     }
 

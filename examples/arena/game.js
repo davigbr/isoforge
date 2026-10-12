@@ -177,7 +177,8 @@ Isoforge.configure({ tileCellsW: 8, tileCellsH: 2, wallHeightCells: 2 });
     }
     Isoforge.grid.solidBorder(grid);
 
-    var spawn = Isoforge.grid.findOpenCell(grid, rng);
+    var spawn = Isoforge.grid.findOpenCellNear(grid, grid.width / 2, grid.height / 2, HERO_RADIUS)
+      || Isoforge.grid.findOpenCell(grid, rng);
     var entities = [{
       kind: "hero",
       x: spawn.x, y: spawn.y, prevX: spawn.x, prevY: spawn.y,

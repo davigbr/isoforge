@@ -125,3 +125,38 @@ function findOpenCell(grid, rng) {
   }
   return { x: grid.width / 2, y: grid.height / 2 };
 }
+
+// Nearest walkable cell with clearance, searched in rings outward from a point.
+// This exists because of a defect a player found: with `findOpenCell` the spawn is
+// random, and a spawn near the world's edge lands OUTSIDE the band the camera is
+// allowed to travel (world minus view). There the camera clamps against the border
+// and the screen looks frozen while the actor walks. Spawning near the middle of the
+// world is always inside that band, whenever the band exists at all.
+//
+// Deterministic and rng-free on purpose: the spawn should not depend on how many
+// draws happened before it.
+function findOpenCellNear(grid, cx, cy, clearance) {
+  var pad = clearance === undefined ? 0.45 : clearance;
+  var maxRadius = Math.max(grid.width, grid.height);
+  function clear(tx, ty) {
+    return grid.isWalkableAt(tx + 0.5 - pad, ty + 0.5 - pad)
+        && grid.isWalkableAt(tx + 0.5 + pad, ty + 0.5 - pad)
+        && grid.isWalkableAt(tx + 0.5 - pad, ty + 0.5 + pad)
+        && grid.isWalkableAt(tx + 0.5 + pad, ty + 0.5 + pad);
+  }
+  var sx = Math.max(1, Math.min(grid.width - 2, Math.round(cx)));
+  var sy = Math.max(1, Math.min(grid.height - 2, Math.round(cy)));
+  for (var r = 0; r < maxRadius; r++) {
+    for (var dy = -r; dy <= r; dy++) {
+      for (var dx = -r; dx <= r; dx++) {
+        // Ring only: skip what an inner ring already tested.
+        if (r > 0 && Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        var tx = sx + dx;
+        var ty = sy + dy;
+        if (tx < 1 || ty < 1 || tx >= grid.width - 1 || ty >= grid.height - 1) continue;
+        if (clear(tx, ty)) return { x: tx + 0.5, y: ty + 0.5 };
+      }
+    }
+  }
+  return null;
+}

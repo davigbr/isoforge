@@ -69,7 +69,8 @@ function engineSurface() {
       createGrid: createGrid,
       solidBorder: solidBorder,
       keepLargestRegion: keepLargestRegion,
-      findOpenCell: findOpenCell
+      findOpenCell: findOpenCell,
+      findOpenCellNear: findOpenCellNear
     },
 
     // Routes over the tile grid. Separate from `actor` on purpose: a turn-based or
