@@ -12,7 +12,7 @@
 // Everything derived is kept in plain module vars (recomputed by configure())
 // so the hot loops read a variable instead of walking an object.
 
-var ENGINE_VERSION = "0.7.0";
+var ENGINE_VERSION = "0.8.0";
 
 var EngineConfig = {
   tileCellsW: 10,          // width of one world tile, in character cells

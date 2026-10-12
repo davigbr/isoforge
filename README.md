@@ -156,7 +156,7 @@ desenhado, e a auditoria varre com ele a cópia que o jogo declara.
 
 ## Estado
 
-Motor em **0.7.0**, auditoria **43/43** na arena de exemplo (**44/44** com o controle
+Motor em **0.8.0**, auditoria **43/43** na arena de exemplo (**44/44** com o controle
 negativo). O plano da fase 0 está em
 [`docs/plan-fase-0.md`](docs/plan-fase-0.md) e o caminho até um ARPG completo, em
 [`docs/roadmap-arpg.md`](docs/roadmap-arpg.md) — a fase 1 (rotas) já está entregue.

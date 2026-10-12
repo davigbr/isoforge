@@ -1,7 +1,7 @@
 {
-  "version": "0.7.0",
-  "engine": "93bf43f2a2811fe55153163a69ea41d1579bdaee",
-  "engine_bytes": 96664,
+  "version": "0.8.0",
+  "engine": "a91f9ec0591493d09a3e6efe5ab749442515a492",
+  "engine_bytes": 96908,
   "css": "0ad9bd3cad17b8f730b665e37294c0860deef53c",
   "modules": [
     "core/config.js",

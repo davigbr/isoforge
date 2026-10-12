@@ -1,4 +1,4 @@
-// Isoforge 0.7.0 -- 2:1 isometric, text-mode, deterministic, offline.
+// Isoforge 0.8.0 -- 2:1 isometric, text-mode, deterministic, offline.
 // Assembled from src/ by build.py. DO NOT EDIT: edit the modules and rebuild.
 var Isoforge = (function () {
 "use strict";
@@ -18,7 +18,7 @@ var Isoforge = (function () {
 // Everything derived is kept in plain module vars (recomputed by configure())
 // so the hot loops read a variable instead of walking an object.
 
-var ENGINE_VERSION = "0.7.0";
+var ENGINE_VERSION = "0.8.0";
 
 var EngineConfig = {
   tileCellsW: 10,          // width of one world tile, in character cells
@@ -964,6 +964,8 @@ function createTextRenderer(preElement, options) {
 //     entityFallback: function (r, ctx),          // optional
 //     cursor: function (r, cx, cy, blocked),      // optional, engine default
 //     cursorColor: 0xRRGGBB, cursorBlockedColor: 0xRRGGBB
+//     // pass cursor: false for no hover indicator at all -- a game whose selection
+//     // lives on the entity itself does not want a second mark on the floor
 //   });
 //
 // `draw(scene, camera, alpha, hoveredTile)` takes a scene of the form
@@ -1081,7 +1083,7 @@ function createWorldView(renderer, art) {
     }
     stats.drawables = active.length;
 
-    if (hoveredTile && hoveredTile.inside) {
+    if (hoveredTile && hoveredTile.inside && art.cursor !== false) {
       var hover = tileCenterCellInLattice(hoveredTile.x + 0.5, hoveredTile.y + 0.5, lattice, cols, rows);
       if (art.cursor) art.cursor(renderer, hover.x, hover.y, !hoveredTile.walkable);
       else drawDefaultCursor(renderer, hover.x, hover.y, !hoveredTile.walkable, art);
@@ -1093,7 +1095,8 @@ function createWorldView(renderer, art) {
 
 // The engine's cursor: a diamond outline that follows the tile geometry, so a
 // game gets a usable hover indicator without writing one. A game that wants its
-// own passes art.cursor and this never runs.
+// own passes art.cursor and this never runs; art.cursor === false disables the
+// indicator entirely.
 function drawDefaultCursor(renderer, centerX, centerY, blocked, art) {
   var cx = Math.round(centerX);
   var cy = Math.round(centerY);
