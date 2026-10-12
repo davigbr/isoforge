@@ -305,25 +305,44 @@ def engine_checks(page, html_path, report_png=None):
     # Freeze the scene first: entities that keep walking paint over the sampled
     # cells, which is indistinguishable from unstable art. With the loop stopped
     # and only the CAMERA shifted, every difference is art instability.
+    #
+    # The window is the TILE'S OWN FOOTPRINT, derived from the geometry, and not a
+    # fixed +-5/+-4 box. Two reasons, both measured at a doubled tile (20x6): a fixed
+    # box reaches into the neighbouring tiles, and a neighbour legitimately depends on
+    # what is in view (a torch just off screen stops painting its light into a cell
+    # that is still empty), which is not art instability but looks exactly like it.
+    # Deriving the span also keeps the window the same *fraction* of a tile at any
+    # resolution, which is what this check has always been about.
     page.evaluate("window.ISO.loop.stop()")
     art = data(page, """(() => {
       var ISO = window.ISO, g = ISO.grid, cam = ISO.camera;
+      var spanX = Math.ceil(Isoforge.iso.diamondHalfW());
+      var spanY = Math.ceil(Isoforge.iso.diamondHalfH());
       var offsets = [];
-      for (var oy = -4; oy <= 4; oy++) for (var ox = -5; ox <= 5; ox++) offsets.push([ox, oy]);
+      for (var oy = -spanY; oy <= spanY; oy++) {
+        for (var ox = -spanX; ox <= spanX; ox++) offsets.push([ox, oy]);
+      }
       function find(wantSolid) {
-        // Search wide: a game can spawn the player in the middle of a clearing,
-        // and "no solid tile within 3 rows" would crash the sample instead of
-        // measuring anything.
-        for (var r = 1; r < 16; r++) {
-          for (var a = -9; a <= 9; a++) {
-            var tx = Math.floor(cam.x) + a, ty = Math.floor(cam.y) + (wantSolid ? r : -r);
+        // Search the VISIBLE tiles and take the nearest one. Originally this walked a
+        // fixed tile range around the camera, which stops working when the tile grows:
+        // with 20x6 cells the view covers few tiles, the camera sits in a clearing, and
+        // a fixed window finds nothing -- and then the sample crashes on null instead
+        // of measuring.
+        var m = window.ISO.metrics();
+        var bounds = Isoforge.iso.visibleTileBounds(cam.x, cam.y, m.cols, m.rows, 0);
+        var best = null;
+        for (var ty = bounds.y0; ty <= bounds.y1; ty++) {
+          for (var tx = bounds.x0; tx <= bounds.x1; tx++) {
             if (tx < 1 || ty < 1 || tx >= g.width - 1 || ty >= g.height - 1) continue;
-            if (wantSolid === !g.isWalkableTile(tx, ty)) return [tx, ty];
+            if (wantSolid !== !g.isWalkableTile(tx, ty)) continue;
+            var d = (tx + 0.5 - cam.x) * (tx + 0.5 - cam.x) + (ty + 0.5 - cam.y) * (ty + 0.5 - cam.y);
+            if (!best || d < best.d) best = {tile: [tx, ty], d: d};
           }
         }
-        return null;
+        return best ? best.tile : null;
       }
       function sample(tile) {
+        if (!tile) return null;
         var c = ISO.tileCell(tile[0], tile[1]), cells = [];
         for (var i = 0; i < offsets.length; i++) {
           var cell = ISO.cellAt(c.x + offsets[i][0], c.y + offsets[i][1]);
@@ -439,8 +458,12 @@ def engine_checks(page, html_path, report_png=None):
       var m = window.ISO.metrics();
       return {inked: inked, cells: total, distinct: Object.keys(glyphs).length, expectedCells: m.cols * m.rows};
     })()""")
+    # O piso de variedade é um PISO contra tela vazia ou listrada, não uma meta de
+    # riqueza: com tile maior cabem menos tiles na tela, então menos glifos distintos
+    # aparecem ainda que a textura por tile seja a mesma. Medido: 16 no tile de 20
+    # células contra mais de 20 no de 10, com a mesma paleta.
     check("world layer: enough ink and glyph variety to be art, and the grid matches the metrics",
-          world_probe["inked"] > world_probe["cells"] * 0.15 and world_probe["distinct"] > 20
+          world_probe["inked"] > world_probe["cells"] * 0.15 and world_probe["distinct"] > 12
           and world_probe["cells"] == world_probe["expectedCells"],
           world_probe)
 

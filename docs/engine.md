@@ -118,6 +118,15 @@ isWalkableTile, setWalkable, floorVariant, countWalkable }`.
 que um spawn quer, para não nascer fora da faixa que a câmera pode percorrer).
 O gerador (caverna, salas, arena) é do jogo: o motor não sabe que mundo é este.
 
+**Resolução é parâmetro.** `tileCellsW/H` decidem quantas células uma peça ocupa:
+10×3 e 20×6 dão a MESMA proporção 2:1 em pixels (a célula é 1,67:1), com o dobro do
+detalhe por peça no segundo. `wallHeightCells` e `latticeQuantum` acompanham (o
+quântico precisa ser maior que a célula, e a sangria é metade dele). O motor não
+muda: projeção, canto do losango, margem do culling, faixa da câmera e o teste de
+seleção derivam de `configure()`. O que muda é a ARTE do jogo, que precisa de um
+fator de escala nos próprios deslocamentos — mais caracteres por peça só existem se
+alguém os posicionar.
+
 ### `loop` — passo fixo
 `createLoop({ step, render })` · `hash32Init/Mix/Finish` ·
 `FIXED_STEP_MS` em `debug.constants.stepMs`. A simulação nunca lê o relógio; o
@@ -269,8 +278,22 @@ Cada uma custou uma rodada de investigação; estão aqui para não custarem de 
   como chão (o `createGrid` nasce sólido, e a checagem de linha de visão falhou por isso
   e não por linha de visão), e uma re-sondagem de golpe que já tinha recuperado (então
   "recusou" veio falso). Antes de acusar o código, conferir o cenário do teste.
-- **Checagem de cópia com índice de linha fixo quebra quando o painel ganha uma linha.**
-  Procure a string na grade inteira em vez de indexar a linha.
+- **Checagem com janela fixa em células assume um tamanho de tile.** Ao dobrar o tile
+  (10×3 → 20×6) três checagens quebraram sozinhas: a janela da arte (±5/±4 células)
+  passou a invadir os tiles vizinhos, a busca do tile a amostrar (16 tiles de distância)
+  passou a sair da tela, e o piso de "glifos distintos" (20) caiu para 16 mesmo com a
+  mesma paleta. Regra: derive a janela, a busca e o piso da GEOMETRIA
+  (`diamondHalfW/H`, `visibleTileBounds`, `metrics`), nunca de números medidos no tile
+  de 10. O piso de variedade é piso, não meta.
+- **Laço de desenho tem de andar em célula INTEIRA.** O meio-lado do losango é
+  fracionário (9,5 num tile de 20): varrer `dx` de 9,5 em 9,5 põe metade das amostras em
+  `.5`, e a célula pintada passa a depender do arredondamento da posição da malha — o
+  mesmo tile pinta células diferentes depois de a câmera andar. Use
+  `Math.ceil(meioLado)` no limite e deixe o teste do losango rejeitar o canto.
+- **A luz dimensionada pela escala vaza para o tile vizinho.** Com raio 12 células num
+  tile de 6 de altura, a tocha pinta dentro da vizinhança — e como ela só toca célula
+  ainda vazia, se a tocha sai da tela ela para de pintar ali. Não é arte instável, mas
+  parece: amostre a pegada do PRÓPRIO tile, não o quarteirão.
 - **`PYTHONPATH` no ambiente Hermes aponta para `site-packages` de outro Python** e
   quebra `playwright`/`PIL` em venv: rode `PYTHONPATH= /venv/bin/python3 script.py`.
 - **Caractere sem glifo vira espaço em silêncio.** O conjunto de glifos precisa
