@@ -12,6 +12,44 @@
 
 ---
 
+## 0. Decisões travadas (respondidas antes de começar)
+
+| questão | decisão |
+|---|---|
+| Arquitetura | **A** — Canvas 2D, arquivo único, dirigido por dados, com a fronteira `Renderer` isolada para permitir migrar a WebGL2 depois |
+| Distribuição | **Arquivo único `.html`**, abre com dois cliques, offline |
+| Arte | **Script PIL determinístico** gerando o atlas, embutido em data-URI |
+| Fatia | **+ um inimigo com IA (idle/chase/attack) e combate simples** |
+| Conceito | **Cripta** — masmorra em salas e corredores |
+
+## 0.1 Fase 0 executada e auditada (20/20)
+
+`isoforge.html` (46 KB, `node --check` limpo), auditado por `tools/audit_phase0.py` em navegador real:
+
+| medida | resultado |
+|---|---|
+| fps | 60,2 (p50 16,7 ms, p95 16,8 ms) |
+| custo de desenho | **p95 0,4–0,7 ms** por quadro |
+| culling em 1280×633 | **841 desenhados = 841 visíveis**, 0 furos, 0 sobra |
+| dpr 2 (2560×1266) | escala de pixel inteira, mesma área de mundo, 841 = 841 |
+| projeção 2:1 ida-e-volta | erro máximo 0 em 2.000 amostras |
+| determinismo | 2 execuções de 600 passos, hashes idênticos |
+| emenda | passo 600 ≡ passo 0 (hash de posição igual) |
+| velocidade | 4,2 tiles/s exatos (61 tiques × 0,07) |
+| colisão | empurrar contra bloco diagonal não entra no tile; desliza |
+| layout | 1280×633 e 390×844 sem overflow, HUD dentro da tela |
+| console | limpo em todos os fluxos |
+
+**Três defeitos reais encontrados pela auditoria (e corrigidos):**
+
+1. Osciladores inicializados fora de fase (`x = home` em vez de `home + A·cos(0)`): o passo 600 caía no extremo oposto e o primeiro quadro teleportava meia amplitude. Corrigido com `wandererPosition(w, tick)` como fonte única.
+2. Culling iterava o retângulo do losango: 4.489 tiles para 2.104 visíveis (2,1× de desperdício). Agora há teste exato de diamante por tile, com limites estritos para que desenhados == visíveis exatamente.
+3. Rodapé de controles estourava em 390 px (agora quebra linha e centraliza).
+
+**Limitação do ambiente de auditoria (não do jogo):** em aba de fundo o navegador suspende `requestAnimationFrame` (`visibilityState: "hidden"`), então o loop parece morto (0 quadros, 0 tiques). O `audit_phase0.py` traz a página para frente e assere `visible` antes de medir.
+
+---
+
 ## 1. Medições que decidiram a arquitetura
 
 Feitas **antes** do plano, neste Mac, Chromium 155 (headless), página aberta por `file://`:
