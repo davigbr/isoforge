@@ -1,4 +1,4 @@
-// Isoforge 0.4.0 -- 2:1 isometric, text-mode, deterministic, offline.
+// Isoforge 0.5.0 -- 2:1 isometric, text-mode, deterministic, offline.
 // Assembled from src/ by build.py. DO NOT EDIT: edit the modules and rebuild.
 var Isoforge = (function () {
 "use strict";
@@ -18,7 +18,7 @@ var Isoforge = (function () {
 // Everything derived is kept in plain module vars (recomputed by configure())
 // so the hot loops read a variable instead of walking an object.
 
-var ENGINE_VERSION = "0.4.0";
+var ENGINE_VERSION = "0.5.0";
 
 var EngineConfig = {
   tileCellsW: 10,          // width of one world tile, in character cells
@@ -1224,6 +1224,266 @@ function findOpenCell(grid, rng) {
   return { x: grid.width / 2, y: grid.height / 2 };
 }
 
+// ---- sim/pathfind.js ---------------------------------------------------
+// Pathfinding on the tile grid: A* with integer costs, plus the line-of-sight test
+// that both the route smoothing and (later) ranged attacks need.
+//
+// Why integer costs: floats make two different routes compare equal by accident,
+// and the engine promises that the same grid and the same endpoints always produce
+// the same route (the audit checks it). Straight step = 1000, diagonal = 1414 (the
+// integer form of sqrt(2) * 1000), so every comparison is exact.
+//
+// Why the search runs on command and not per frame: it is called when the player
+// clicks, so a per-call scratch allocation is free in practice. Nothing here may
+// touch the frame budget.
+//
+// Kept out of `actor`: movement is "how do I get there", pathfinding is "where do
+// I go", and a game may want the second without the first (turn-based, AI planning).
+
+var PATH_VERSION = 1;
+var PATH_MAX_NODES = 4000;
+var PATH_STRAIGHT = 1000;
+var PATH_DIAGONAL = 1414;
+
+var PATH_NEIGHBOURS = [
+  [1, 0], [-1, 0], [0, 1], [0, -1],
+  [1, 1], [1, -1], [-1, 1], [-1, -1]
+];
+
+function pathTileOf(grid, x, y) {
+  return {
+    x: Math.max(0, Math.min(grid.width - 1, Math.floor(x))),
+    y: Math.max(0, Math.min(grid.height - 1, Math.floor(y)))
+  };
+}
+
+// Nearest walkable tile, searched in rings so the result is stable: clicking a wall
+// walks you to the floor beside it, which is what the player expects.
+function nearestWalkable(grid, tx, ty, maxRadius) {
+  if (grid.isWalkableTile(tx, ty)) return { x: tx, y: ty };
+  var limit = maxRadius === undefined ? 8 : maxRadius;
+  for (var r = 1; r <= limit; r++) {
+    for (var dy = -r; dy <= r; dy++) {
+      for (var dx = -r; dx <= r; dx++) {
+        // Ring only: skip what an inner ring already covered.
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        var nx = tx + dx;
+        var ny = ty + dy;
+        if (nx < 0 || ny < 0 || nx >= grid.width || ny >= grid.height) continue;
+        if (grid.isWalkableTile(nx, ny)) return { x: nx, y: ny };
+      }
+    }
+  }
+  return null;
+}
+
+// Can a straight line go from one tile centre to another without crossing a wall?
+// Diagonals are rejected when both orthogonal neighbours are blocked, which is the
+// conservative side of the corner-cutting question: better to route around than to
+// clip a corner the body cannot pass.
+function hasLineOfSight(grid, ax, ay, bx, by) {
+  var x0 = Math.floor(ax);
+  var y0 = Math.floor(ay);
+  var x1 = Math.floor(bx);
+  var y1 = Math.floor(by);
+  var dx = Math.abs(x1 - x0);
+  var dy = Math.abs(y1 - y0);
+  var sx = x0 < x1 ? 1 : -1;
+  var sy = y0 < y1 ? 1 : -1;
+  var x = x0;
+  var y = y0;
+  if (!grid.isWalkableTile(x, y) || !grid.isWalkableTile(x1, y1)) return false;
+  var guard = 0;
+  while ((x !== x1 || y !== y1) && guard++ < 4096) {
+    if (dx > dy) {
+      x += sx;
+      if (dx !== dy && !grid.isWalkableTile(x, y)) return false;
+      if (dx === dy && !grid.isWalkableTile(x, y - sy)) return false;
+    } else if (dy > dx) {
+      y += sy;
+      if (dx !== dy && !grid.isWalkableTile(x, y)) return false;
+      if (dx === dy && !grid.isWalkableTile(x - sx, y)) return false;
+    } else {
+      if (!grid.isWalkableTile(x + sx, y) || !grid.isWalkableTile(x, y + sy)) return false;
+      x += sx;
+      y += sy;
+    }
+    if (!grid.isWalkableTile(x, y)) return false;
+  }
+  return true;
+}
+
+// Binary heap keyed on (f, id): the id tie-break is what makes the route stable
+// across runs when two nodes cost exactly the same.
+function createHeap() {
+  var items = [];
+  function less(a, b) { return a.f === b.f ? a.id < b.id : a.f < b.f; }
+  return {
+    size: function () { return items.length; },
+    push: function (item) {
+      items.push(item);
+      var i = items.length - 1;
+      while (i > 0) {
+        var parent = (i - 1) >> 1;
+        if (less(items[i], items[parent])) {
+          var swap = items[i]; items[i] = items[parent]; items[parent] = swap;
+          i = parent;
+        } else break;
+      }
+    },
+    pop: function () {
+      var top = items[0];
+      var last = items.pop();
+      if (items.length) {
+        items[0] = last;
+        var i = 0;
+        for (;;) {
+          var l = 2 * i + 1;
+          var r = l + 1;
+          var best = i;
+          if (l < items.length && less(items[l], items[best])) best = l;
+          if (r < items.length && less(items[r], items[best])) best = r;
+          if (best === i) break;
+          var swap = items[i]; items[i] = items[best]; items[best] = swap;
+          i = best;
+        }
+      }
+      return top;
+    }
+  };
+}
+
+// A* over tiles. Returns tile-centre waypoints, with the exact requested point as
+// the last one when the request itself was walkable (so the body stops where the
+// player clicked, not at the centre of the tile).
+function findPath(grid, fromX, fromY, toX, toY, options) {
+  options = options || {};
+  var allowDiagonal = options.allowDiagonal !== false;
+  var smooth = options.smooth !== false;
+  var maxNodes = options.maxNodes || PATH_MAX_NODES;
+  var width = grid.width;
+  var size = width * grid.height;
+
+  var start = pathTileOf(grid, fromX, fromY);
+  var requested = pathTileOf(grid, toX, toY);
+  var goal = requested;
+  var snapped = false;
+  if (!grid.isWalkableTile(goal.x, goal.y)) {
+    var near = nearestWalkable(grid, goal.x, goal.y, options.snapRadius === undefined ? 8 : options.snapRadius);
+    if (!near) return { found: false, points: [], reason: "goal blocked" };
+    goal = near;
+    snapped = true;
+  }
+  if (!grid.isWalkableTile(start.x, start.y)) {
+    var from = nearestWalkable(grid, start.x, start.y, 8);
+    if (!from) return { found: false, points: [], reason: "start blocked" };
+    start = from;
+  }
+
+  var gScore = new Int32Array(size).fill(0x7fffffff);
+  var cameFrom = new Int32Array(size).fill(-1);
+  var closed = new Uint8Array(size);
+  var startId = start.y * width + start.x;
+  var goalId = goal.y * width + goal.x;
+
+  function heuristic(x, y) {
+    var dx = Math.abs(x - goal.x);
+    var dy = Math.abs(y - goal.y);
+    var min = dx < dy ? dx : dy;
+    var max = dx < dy ? dy : dx;
+    return PATH_DIAGONAL * min + PATH_STRAIGHT * (max - min);
+  }
+
+  var open = createHeap();
+  gScore[startId] = 0;
+  open.push({ id: startId, x: start.x, y: start.y, g: 0, f: heuristic(start.x, start.y) });
+  var expanded = 0;
+  var found = false;
+  var neighbours = allowDiagonal ? PATH_NEIGHBOURS.length : 4;
+
+  while (open.size() > 0 && expanded < maxNodes) {
+    var current = open.pop();
+    if (closed[current.id]) continue;
+    closed[current.id] = 1;
+    expanded++;
+    if (current.id === goalId) { found = true; break; }
+    for (var n = 0; n < neighbours; n++) {
+      var step = PATH_NEIGHBOURS[n];
+      var nx = current.x + step[0];
+      var ny = current.y + step[1];
+      if (nx < 0 || ny < 0 || nx >= width || ny >= grid.height) continue;
+      if (!grid.isWalkableTile(nx, ny)) continue;
+      var diagonal = step[0] !== 0 && step[1] !== 0;
+      if (diagonal && !options.cornerCut) {
+        // No cutting between two blocked tiles: a body with width cannot pass.
+        if (!grid.isWalkableTile(current.x + step[0], current.y) ||
+            !grid.isWalkableTile(current.x, current.y + step[1])) continue;
+      }
+      var id = ny * width + nx;
+      if (closed[id]) continue;
+      var cost = current.g + (diagonal ? PATH_DIAGONAL : PATH_STRAIGHT);
+      if (cost >= gScore[id]) continue;
+      gScore[id] = cost;
+      cameFrom[id] = current.id;
+      open.push({ id: id, x: nx, y: ny, g: cost, f: cost + heuristic(nx, ny) });
+    }
+  }
+
+  if (!found) {
+    return { found: false, points: [], expanded: expanded, reason: "no route", snapped: snapped };
+  }
+
+  // Reconstruct goal -> start, then flip.
+  var tiles = [];
+  var walk = goalId;
+  var guard = 0;
+  while (walk !== -1 && guard++ < size) {
+    tiles.push({ x: walk % width, y: Math.floor(walk / width) });
+    walk = cameFrom[walk];
+  }
+  tiles.reverse();
+
+  var points = [];
+  if (smooth && tiles.length > 2) {
+    // String pulling: keep a waypoint only when the next tile is not directly
+    // visible from the last kept one.
+    var kept = 0;
+    points.push({ x: tiles[0].x + 0.5, y: tiles[0].y + 0.5 });
+    for (var i = 1; i < tiles.length - 1; i++) {
+      var anchor = tiles[kept];
+      var candidate = tiles[i + 1];
+      if (!hasLineOfSight(grid, anchor.x + 0.5, anchor.y + 0.5, candidate.x + 0.5, candidate.y + 0.5)) {
+        points.push({ x: tiles[i].x + 0.5, y: tiles[i].y + 0.5 });
+        kept = i;
+      }
+    }
+    points.push({ x: tiles[tiles.length - 1].x + 0.5, y: tiles[tiles.length - 1].y + 0.5 });
+  } else {
+    for (var k = 0; k < tiles.length; k++) {
+      points.push({ x: tiles[k].x + 0.5, y: tiles[k].y + 0.5 });
+    }
+  }
+
+  // The exact click wins over the tile centre when the player aimed at open floor.
+  if (!snapped && points.length) {
+    points[points.length - 1] = { x: toX, y: toY };
+  }
+  return {
+    found: true, points: points, expanded: expanded, snapped: snapped,
+    tiles: tiles.length, start: start, goal: goal
+  };
+}
+
+// A stable signature of a route, for the audit to compare two runs.
+function pathSignature(points) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < points.length; i++) {
+    h = Math.imul(h ^ Math.round(points[i].x * 1000), 0x01000193) >>> 0;
+    h = Math.imul(h ^ Math.round(points[i].y * 1000), 0x01000193) >>> 0;
+  }
+  return ("0000000" + h.toString(16)).slice(-8);
+}
+
 // ---- sim/actor.js ------------------------------------------------------
 // Locomotion primitives: how an actor moves over a tile grid and how the camera
 // follows it. A game composes these into its own step(); the engine does not
@@ -1304,6 +1564,72 @@ function clearTarget(actor) {
   actor.targetX = null;
   actor.targetY = null;
   actor.blocked = false;
+}
+
+// --- following a route ------------------------------------------------------
+// The route itself comes from sim/pathfind.js. This half is only about how a body
+// walks it: waypoint by waypoint, never overshooting, and giving up (leaving
+// actor.blocked set) when a wall appears in the way, so the game can decide
+// whether to recompute or stop.
+
+function setPath(actor, points) {
+  actor.path = points && points.length ? points : null;
+  actor.pathIndex = 0;
+}
+
+function dropPath(actor) {
+  actor.path = null;
+  actor.pathIndex = 0;
+}
+
+function followPath(grid, actor, speed, dt, options) {
+  options = options || {};
+  var arrive = options.arrive === undefined ? 0.08 : options.arrive;
+  actor.prevX = actor.x;
+  actor.prevY = actor.y;
+  actor.blocked = false;
+  if (!actor.path) return false;
+  if (actor.pathIndex >= actor.path.length) { dropPath(actor); return false; }
+
+  var point = actor.path[actor.pathIndex];
+  var toX = point.x - actor.x;
+  var toY = point.y - actor.y;
+  var distance = Math.sqrt(toX * toX + toY * toY);
+  if (distance <= arrive) {
+    actor.pathIndex++;
+    if (actor.pathIndex >= actor.path.length) {
+      dropPath(actor);
+      clearTarget(actor);
+    }
+    return false;
+  }
+  // Clamped to the remaining distance: without this the body steps past a waypoint
+  // it should turn at, and the corners of the route get cut.
+  var travel = Math.min(speed * dt, distance);
+  var moved = moveWithCollision(grid, actor, (toX / distance) * travel, (toY / distance) * travel);
+  if (!moved) {
+    actor.blocked = true;
+    dropPath(actor);
+  }
+  return moved;
+}
+
+// Click-to-move entry point: compute a route to a world point and start walking it.
+// targetX / targetY hold the FINAL destination rather than the next waypoint, so a
+// game's state hash covers the order it was given, not the route it took.
+function navigate(grid, actor, x, y, options) {
+  var result = findPath(grid, actor.x, actor.y, x, y, options);
+  if (!result.found) {
+    dropPath(actor);
+    clearTarget(actor);
+    actor.blocked = true;
+    return result;
+  }
+  setPath(actor, result.points);
+  actor.targetX = x;
+  actor.targetY = y;
+  actor.blocked = false;
+  return result;
 }
 
 // Frame rate independent easing: the camera keeps the same feel at 30 and at
@@ -1433,11 +1759,97 @@ function createHeadless(options) {
     };
   }
 
+  // Routes over the scene's own grid. Two claims: the same endpoints always give
+  // the same route (so a replay is faithful), and a route never puts a waypoint
+  // inside a wall (so following it cannot walk through one). Goals inside walls
+  // are included on purpose: clicking a wall must walk you beside it.
+  function paths(seed, cases) {
+    var signatures = [];
+    var identical = true;
+    var routes = 0;
+    var refused = 0;
+    var wallHits = 0;
+    var blockedGoals = 0;
+    var snappedGoals = 0;
+    var waypoints = 0;
+    var longest = 0;
+
+    function search(scene, sx, sy, tx, ty) {
+      return findPath(scene.grid, sx + 0.5, sy + 0.5, tx + 0.5, ty + 0.5, { smooth: false });
+    }
+
+    function pass(record) {
+      var scene = createScene(seed);
+      var grid = scene.grid;
+      var rng = createRng(seed + 31337);
+      var out = [];
+      for (var i = 0; i < cases; i++) {
+        var from = nearestWalkable(grid, Math.floor(rng() * grid.width), Math.floor(rng() * grid.height), 12);
+        if (!from) continue;
+        var tx = Math.floor(rng() * grid.width);
+        var ty = Math.floor(rng() * grid.height);
+        var goalBlocked = !grid.isWalkableTile(tx, ty);
+        var first = search(scene, from.x, from.y, tx, ty);
+        var again = search(scene, from.x, from.y, tx, ty);
+        out.push(pathSignature(first.points) + "|" + pathSignature(again.points) +
+                 "|" + (first.found ? 1 : 0) + "|" + (first.snapped ? 1 : 0));
+        if (first.points.length !== again.points.length) identical = false;
+        else {
+          for (var k = 0; k < first.points.length; k++) {
+            if (first.points[k].x !== again.points[k].x || first.points[k].y !== again.points[k].y) {
+              identical = false;
+              break;
+            }
+          }
+        }
+        if (!record) continue;
+        if (!first.found) { refused++; continue; }
+        routes++;
+        waypoints += first.points.length;
+        if (first.points.length > longest) longest = first.points.length;
+        if (goalBlocked) {
+          blockedGoals++;
+          if (first.snapped) snappedGoals++;
+        }
+        for (var w = 0; w < first.points.length; w++) {
+          if (!grid.isWalkableAt(first.points[w].x, first.points[w].y)) { wallHits++; break; }
+        }
+      }
+      return out;
+    }
+
+    // The second pass exists only to compare: counting it too would double every
+    // number in the report (`record`).
+    var firstPass = pass(true);
+    var secondPass = pass(false);
+    for (var i = 0; i < firstPass.length && i < secondPass.length; i++) {
+      if (firstPass[i] !== secondPass[i]) identical = false;
+    }
+    if (firstPass.length !== secondPass.length) identical = false;
+    var text = firstPass.join(";");
+    var h = hash32Init();
+    for (var c = 0; c < text.length; c++) h = hash32Mix(h, text.charCodeAt(c));
+    return {
+      seed: seed,
+      cases: cases,
+      routes: routes,
+      refused: refused,
+      wallHits: wallHits,
+      blockedGoals: blockedGoals,
+      snappedGoals: snappedGoals,
+      waypoints: waypoints,
+      longest: longest,
+      identical: identical,
+      signature: hash32Finish(h)
+    };
+  }
+
   return {
     determinism: determinism,
     loopClosure: loopClosure,
     projectionRoundTrip: projectionRoundTrip,
-    culling: culling
+    culling: culling,
+    paths: paths
   };
 }
 
@@ -1599,6 +2011,16 @@ function engineSurface() {
       findOpenCell: findOpenCell
     },
 
+    // Routes over the tile grid. Separate from `actor` on purpose: a turn-based or
+    // planning-only game wants the search without the locomotion, and a click-to-move
+    // game wants both, composed by navigate().
+    path: {
+      find: findPath,
+      hasLineOfSight: hasLineOfSight,
+      nearestWalkable: nearestWalkable,
+      signature: pathSignature
+    },
+
     loop: {
       createLoop: createLoop,
       hash32Init: hash32Init,
@@ -1620,6 +2042,10 @@ function engineSurface() {
       moveWithCollision: moveWithCollision,
       moveByInput: moveByInput,
       stepTowardTarget: stepTowardTarget,
+      setPath: setPath,
+      dropPath: dropPath,
+      followPath: followPath,
+      navigate: navigate,
       clearTarget: clearTarget,
       followCamera: followCamera
     },
@@ -1642,13 +2068,17 @@ function engineSurface() {
 // way your loop does", camera follow and clamp included. Without it the audit
 // would have to reach into engine internals to move the camera, and would then
 // be testing its own driver instead of the game.
+//
+// setDestination(x, y) is its companion: "order your controllable actor to go
+// there". The audit drives it to prove the game routes around walls, which is a
+// behaviour no amount of reading the grid can establish.
 
 var CONTRACT_MEMBERS = [
   "mode", "version", "seed",
   "scene", "camera", "grid", "renderer", "hudRenderer",
   "metrics", "gridText", "hudText", "cellAt",
   "tileCell", "clientPointForTile",
-  "teleport", "setRows", "getRows", "renderOnce", "reseed",
+  "teleport", "setDestination", "actorPosition", "setRows", "getRows", "renderOnce", "reseed",
   "stepScene", "loop", "headless", "debug"
 ];
 

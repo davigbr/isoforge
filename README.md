@@ -26,8 +26,10 @@ navegador parseia e re-layouta.
 
 - Projeção 2:1 fixa: **a tela nunca rotaciona**, uma orientação de tile para o jogo inteiro.
 - Simulação determinística a passo fixo de 60 Hz: mesma semente + mesma entrada = mesmo hash de estado.
+- **Rotas por A\* com custos inteiros**: clique atrás de parede é contornado, destino
+  bloqueado vai para o piso ao lado, e a mesma pergunta dá sempre a mesma rota.
 - Motor e jogo separados: este repositório é o motor; os jogos vendoram `dist/`.
-- 30 invariantes verificadas em um Chromium de verdade, com controle negativo.
+- 35 invariantes verificadas em um Chromium de verdade, com controle negativo.
 
 ## O que não é
 
@@ -92,7 +94,7 @@ docs/engine.md  referência da API e armadilhas medidas
 
 ```sh
 pip install playwright && playwright install chromium
-python3 tools/audit_engine.py                      # 30 checagens no jogo de exemplo
+python3 tools/audit_engine.py                      # 35 checagens no jogo de exemplo
 python3 tools/audit_engine.py --html cripta.html   # roda em QUALQUER jogo do motor
 python3 tools/audit_engine.py --negative-control   # +1 checagem: prova que a de rigidez pode falhar
 ```
@@ -154,12 +156,10 @@ desenhado, e a auditoria varre com ele a cópia que o jogo declara.
 
 ## Estado
 
-Motor em **0.4.0**, auditoria **30/30** na arena de exemplo (**31/31** com o controle
+Motor em **0.5.0**, auditoria **35/35** na arena de exemplo (**36/36** com o controle
 negativo). O plano da fase 0 está em
-[`docs/plan-fase-0.md`](docs/plan-fase-0.md). Pendente: arte amostrada de uma cena PIL
-para templates de caractere (a âncora existe no build), A* de verdade e uma camada de
-entidades mais rica — os dois últimos provavelmente pertencem a um `sim/` do jogo, não
-ao motor.
+[`docs/plan-fase-0.md`](docs/plan-fase-0.md) e o caminho até um ARPG completo, em
+[`docs/roadmap-arpg.md`](docs/roadmap-arpg.md) — a fase 1 (rotas) já está entregue.
 
 ## Licença
 

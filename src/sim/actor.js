@@ -79,6 +79,72 @@ function clearTarget(actor) {
   actor.blocked = false;
 }
 
+// --- following a route ------------------------------------------------------
+// The route itself comes from sim/pathfind.js. This half is only about how a body
+// walks it: waypoint by waypoint, never overshooting, and giving up (leaving
+// actor.blocked set) when a wall appears in the way, so the game can decide
+// whether to recompute or stop.
+
+function setPath(actor, points) {
+  actor.path = points && points.length ? points : null;
+  actor.pathIndex = 0;
+}
+
+function dropPath(actor) {
+  actor.path = null;
+  actor.pathIndex = 0;
+}
+
+function followPath(grid, actor, speed, dt, options) {
+  options = options || {};
+  var arrive = options.arrive === undefined ? 0.08 : options.arrive;
+  actor.prevX = actor.x;
+  actor.prevY = actor.y;
+  actor.blocked = false;
+  if (!actor.path) return false;
+  if (actor.pathIndex >= actor.path.length) { dropPath(actor); return false; }
+
+  var point = actor.path[actor.pathIndex];
+  var toX = point.x - actor.x;
+  var toY = point.y - actor.y;
+  var distance = Math.sqrt(toX * toX + toY * toY);
+  if (distance <= arrive) {
+    actor.pathIndex++;
+    if (actor.pathIndex >= actor.path.length) {
+      dropPath(actor);
+      clearTarget(actor);
+    }
+    return false;
+  }
+  // Clamped to the remaining distance: without this the body steps past a waypoint
+  // it should turn at, and the corners of the route get cut.
+  var travel = Math.min(speed * dt, distance);
+  var moved = moveWithCollision(grid, actor, (toX / distance) * travel, (toY / distance) * travel);
+  if (!moved) {
+    actor.blocked = true;
+    dropPath(actor);
+  }
+  return moved;
+}
+
+// Click-to-move entry point: compute a route to a world point and start walking it.
+// targetX / targetY hold the FINAL destination rather than the next waypoint, so a
+// game's state hash covers the order it was given, not the route it took.
+function navigate(grid, actor, x, y, options) {
+  var result = findPath(grid, actor.x, actor.y, x, y, options);
+  if (!result.found) {
+    dropPath(actor);
+    clearTarget(actor);
+    actor.blocked = true;
+    return result;
+  }
+  setPath(actor, result.points);
+  actor.targetX = x;
+  actor.targetY = y;
+  actor.blocked = false;
+  return result;
+}
+
 // Frame rate independent easing: the camera keeps the same feel at 30 and at
 // 144 fps, and it never overshoots.
 function followCamera(camera, targetX, targetY, dt, rate) {

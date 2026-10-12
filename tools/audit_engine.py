@@ -505,6 +505,80 @@ def engine_checks(page, html_path, report_png=None):
     check("HUD overlay: panels paint a background and the rest of the layer stays transparent",
           hud_bg["opaque"] > 20 and hud_bg["transparentShare"] >= 0.6, hud_bg)
 
+    # 10e. routes: a destination behind a wall has to be reached --------------
+    # Two claims. The first is about routes in general: no route ever puts a
+    # waypoint inside a wall, and a goal inside a wall snaps to the floor beside it
+    # rather than refusing. The second is the one no amount of reading the grid can
+    # establish: the actor, driven ONLY through the contract, reaches a destination
+    # whose straight line is blocked.
+    routes = data(page, "window.ISO.headless.paths(window.ISO.seed, 60)")
+    check("pathfinding: no route puts a waypoint inside a wall, and a blocked goal snaps to floor",
+          routes["wallHits"] == 0 and routes["routes"] >= 20
+          and (routes["blockedGoals"] == 0 or routes["snappedGoals"] >= routes["blockedGoals"]),
+          {"routes": routes["routes"], "refused": routes["refused"], "wallHits": routes["wallHits"],
+           "blockedGoals": routes["blockedGoals"], "snapped": routes["snappedGoals"],
+           "waypoints": routes["waypoints"], "longest": routes["longest"]})
+    check("pathfinding: the same grid and the same endpoints always produce the same route",
+          routes["identical"], {"signature": routes["signature"], "cases": routes["cases"]})
+
+    # The target has to be a real detour: a visible target would make the drive
+    # below vacuous, and a game with no walls at all must say so loudly instead of
+    # passing quietly.
+    hidden = data(page, """(() => {
+      var ISO = window.ISO, g = ISO.grid, P = Isoforge.path;
+      var here = ISO.actorPosition();
+      for (var r = 4; r <= 24; r++) {
+        for (var a = 0; a < 64; a++) {
+          var angle = a * Math.PI / 32;
+          var tx = Math.round(Math.floor(here.x) + Math.cos(angle) * r);
+          var ty = Math.round(Math.floor(here.y) + Math.sin(angle) * r);
+          if (tx < 1 || ty < 1 || tx >= g.width - 1 || ty >= g.height - 1) continue;
+          if (!g.isWalkableTile(tx, ty)) continue;
+          if (P.hasLineOfSight(g, here.x, here.y, tx + 0.5, ty + 0.5)) continue;
+          var route = P.find(g, here.x, here.y, tx + 0.5, ty + 0.5, {smooth: false});
+          if (!route.found || route.tiles <= r) continue;
+          return {from: [+here.x.toFixed(2), +here.y.toFixed(2)],
+                  target: {x: tx + 0.5, y: ty + 0.5}, ring: r,
+                  routeTiles: route.tiles, expanded: route.expanded};
+        }
+      }
+      return {from: [+here.x.toFixed(2), +here.y.toFixed(2)], target: null};
+    })()""")
+    check("pathfinding: the audit found a destination that really is behind a wall (so the drive has power)",
+          hidden["target"] is not None, hidden)
+    drive = None
+    if hidden["target"] is not None:
+        drive = data(page, """(() => {
+          var ISO = window.ISO, g = ISO.grid, target = %s;
+          var start = ISO.actorPosition();
+          ISO.setDestination(target.x, target.y);
+          var insideWall = 0, ticks = 0, arrived = false, travelled = 0;
+          var prevX = start.x, prevY = start.y;
+          for (var i = 0; i < 1200; i++) {
+            ISO.stepScene({});
+            ticks++;
+            var p = ISO.actorPosition();
+            if (!g.isWalkableAt(p.x, p.y)) insideWall++;
+            travelled += Math.sqrt((p.x - prevX) * (p.x - prevX) + (p.y - prevY) * (p.y - prevY));
+            prevX = p.x; prevY = p.y;
+            var d = Math.sqrt((p.x - target.x) * (p.x - target.x) + (p.y - target.y) * (p.y - target.y));
+            if (d <= 0.5) { arrived = true; break; }
+          }
+          var end = ISO.actorPosition();
+          var straight = Math.sqrt((target.x - start.x) * (target.x - start.x)
+                                 + (target.y - start.y) * (target.y - start.y));
+          return {arrived: arrived, ticks: ticks, insideWall: insideWall,
+                  distance: +Math.sqrt((end.x - target.x) * (end.x - target.x)
+                        + (end.y - target.y) * (end.y - target.y)).toFixed(2),
+                  straight: +straight.toFixed(2), travelled: +travelled.toFixed(2),
+                  end: [+end.x.toFixed(2), +end.y.toFixed(2)], target: [target.x, target.y]};
+        })()""" % json.dumps(hidden["target"]))
+        check("pathfinding: the actor reaches a destination whose straight line is blocked",
+              drive["arrived"] and drive["travelled"] > drive["straight"] * 1.02,
+              drive)
+        check("pathfinding: the actor is never inside a wall on the way (sampled every tick)",
+              drive["insideWall"] == 0, {"samples": drive["ticks"], "insideWall": drive["insideWall"]})
+
     # 11. layout: no scrollbar, grid covering the screen -----------------------
     page.set_viewport_size({"width": 1280, "height": 633})
     settle(page, 700)
@@ -553,6 +627,7 @@ def engine_checks(page, html_path, report_png=None):
         "walking": {k: walking[k] for k in ("fps", "p95", "renderP95", "frames", "drops", "stutters")},
         "lattice": {"spreads": spreads, "cameraMoved": round(camera_span, 2)},
         "scroll": steps, "hudBackground": hud_bg, "release": release_measurement, "art": {"rounds": len(rounds), "solidDiff": solid_diffs, "floorDiff": floor_diffs}, "hud": hud_probe, "world": world_probe,
+        "paths": {"routes": routes, "hidden": hidden, "drive": (drive if hidden["target"] is not None else None)},
         "layoutDesktop": desktop, "layoutMobile": mobile, "render": render
     }
 

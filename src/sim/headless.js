@@ -116,10 +116,96 @@ function createHeadless(options) {
     };
   }
 
+  // Routes over the scene's own grid. Two claims: the same endpoints always give
+  // the same route (so a replay is faithful), and a route never puts a waypoint
+  // inside a wall (so following it cannot walk through one). Goals inside walls
+  // are included on purpose: clicking a wall must walk you beside it.
+  function paths(seed, cases) {
+    var signatures = [];
+    var identical = true;
+    var routes = 0;
+    var refused = 0;
+    var wallHits = 0;
+    var blockedGoals = 0;
+    var snappedGoals = 0;
+    var waypoints = 0;
+    var longest = 0;
+
+    function search(scene, sx, sy, tx, ty) {
+      return findPath(scene.grid, sx + 0.5, sy + 0.5, tx + 0.5, ty + 0.5, { smooth: false });
+    }
+
+    function pass(record) {
+      var scene = createScene(seed);
+      var grid = scene.grid;
+      var rng = createRng(seed + 31337);
+      var out = [];
+      for (var i = 0; i < cases; i++) {
+        var from = nearestWalkable(grid, Math.floor(rng() * grid.width), Math.floor(rng() * grid.height), 12);
+        if (!from) continue;
+        var tx = Math.floor(rng() * grid.width);
+        var ty = Math.floor(rng() * grid.height);
+        var goalBlocked = !grid.isWalkableTile(tx, ty);
+        var first = search(scene, from.x, from.y, tx, ty);
+        var again = search(scene, from.x, from.y, tx, ty);
+        out.push(pathSignature(first.points) + "|" + pathSignature(again.points) +
+                 "|" + (first.found ? 1 : 0) + "|" + (first.snapped ? 1 : 0));
+        if (first.points.length !== again.points.length) identical = false;
+        else {
+          for (var k = 0; k < first.points.length; k++) {
+            if (first.points[k].x !== again.points[k].x || first.points[k].y !== again.points[k].y) {
+              identical = false;
+              break;
+            }
+          }
+        }
+        if (!record) continue;
+        if (!first.found) { refused++; continue; }
+        routes++;
+        waypoints += first.points.length;
+        if (first.points.length > longest) longest = first.points.length;
+        if (goalBlocked) {
+          blockedGoals++;
+          if (first.snapped) snappedGoals++;
+        }
+        for (var w = 0; w < first.points.length; w++) {
+          if (!grid.isWalkableAt(first.points[w].x, first.points[w].y)) { wallHits++; break; }
+        }
+      }
+      return out;
+    }
+
+    // The second pass exists only to compare: counting it too would double every
+    // number in the report (`record`).
+    var firstPass = pass(true);
+    var secondPass = pass(false);
+    for (var i = 0; i < firstPass.length && i < secondPass.length; i++) {
+      if (firstPass[i] !== secondPass[i]) identical = false;
+    }
+    if (firstPass.length !== secondPass.length) identical = false;
+    var text = firstPass.join(";");
+    var h = hash32Init();
+    for (var c = 0; c < text.length; c++) h = hash32Mix(h, text.charCodeAt(c));
+    return {
+      seed: seed,
+      cases: cases,
+      routes: routes,
+      refused: refused,
+      wallHits: wallHits,
+      blockedGoals: blockedGoals,
+      snappedGoals: snappedGoals,
+      waypoints: waypoints,
+      longest: longest,
+      identical: identical,
+      signature: hash32Finish(h)
+    };
+  }
+
   return {
     determinism: determinism,
     loopClosure: loopClosure,
     projectionRoundTrip: projectionRoundTrip,
-    culling: culling
+    culling: culling,
+    paths: paths
   };
 }

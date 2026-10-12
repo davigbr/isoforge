@@ -235,9 +235,12 @@ Isoforge.configure({ tileCellsW: 8, tileCellsH: 2, wallHeightCells: 2 });
       input = input || {};
       if (input.moveX || input.moveY) {
         S.clearTarget(hero);
+        S.dropPath(hero);
         S.moveByInput(grid, hero, input.moveX, input.moveY, HERO_SPEED, 1 / 60);
       } else {
-        S.stepTowardTarget(grid, hero, HERO_SPEED, 1 / 60, { arrive: 0.12 });
+        // Following the route A* produced, instead of a straight line that gives up
+        // at the first wall.
+        S.followPath(grid, hero, HERO_SPEED, 1 / 60, { arrive: 0.12 });
       }
       for (var i = 1; i < entities.length; i++) {
         var drone = entities[i];
@@ -268,10 +271,8 @@ Isoforge.configure({ tileCellsW: 8, tileCellsH: 2, wallHeightCells: 2 });
       step: step, stateHash: stateHash,
       getTick: function () { return tick; },
       setTarget: function (worldX, worldY) {
-        if (!grid.isWalkableAt(worldX, worldY)) return false;
-        hero.targetX = worldX;
-        hero.targetY = worldY;
-        return true;
+        var route = Isoforge.actor.navigate(grid, hero, worldX, worldY);
+        return route.found;
       }
     };
   }
@@ -463,8 +464,11 @@ Isoforge.configure({ tileCellsW: 8, tileCellsH: 2, wallHeightCells: 2 });
         scene.hero.x = x; scene.hero.y = y;
         scene.hero.prevX = x; scene.hero.prevY = y;
         S.clearTarget(scene.hero);
+        S.dropPath(scene.hero);
         camera.x = x; camera.y = y;
       },
+      setDestination: function (x, y) { return scene.setTarget(x, y); },
+      actorPosition: function () { return { x: scene.hero.x, y: scene.hero.y }; },
       setRows: setRows,
       getRows: function () { return targetRows; },
       renderOnce: function () { render(1); },

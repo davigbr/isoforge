@@ -72,6 +72,16 @@ function engineSurface() {
       findOpenCell: findOpenCell
     },
 
+    // Routes over the tile grid. Separate from `actor` on purpose: a turn-based or
+    // planning-only game wants the search without the locomotion, and a click-to-move
+    // game wants both, composed by navigate().
+    path: {
+      find: findPath,
+      hasLineOfSight: hasLineOfSight,
+      nearestWalkable: nearestWalkable,
+      signature: pathSignature
+    },
+
     loop: {
       createLoop: createLoop,
       hash32Init: hash32Init,
@@ -93,6 +103,10 @@ function engineSurface() {
       moveWithCollision: moveWithCollision,
       moveByInput: moveByInput,
       stepTowardTarget: stepTowardTarget,
+      setPath: setPath,
+      dropPath: dropPath,
+      followPath: followPath,
+      navigate: navigate,
       clearTarget: clearTarget,
       followCamera: followCamera
     },
@@ -115,13 +129,17 @@ function engineSurface() {
 // way your loop does", camera follow and clamp included. Without it the audit
 // would have to reach into engine internals to move the camera, and would then
 // be testing its own driver instead of the game.
+//
+// setDestination(x, y) is its companion: "order your controllable actor to go
+// there". The audit drives it to prove the game routes around walls, which is a
+// behaviour no amount of reading the grid can establish.
 
 var CONTRACT_MEMBERS = [
   "mode", "version", "seed",
   "scene", "camera", "grid", "renderer", "hudRenderer",
   "metrics", "gridText", "hudText", "cellAt",
   "tileCell", "clientPointForTile",
-  "teleport", "setRows", "getRows", "renderOnce", "reseed",
+  "teleport", "setDestination", "actorPosition", "setRows", "getRows", "renderOnce", "reseed",
   "stepScene", "loop", "headless", "debug"
 ];
 

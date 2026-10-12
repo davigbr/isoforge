@@ -80,6 +80,8 @@ auditoria dirige; um jogo que não o exponha não sobe.
 | `tileCell(tx, ty)` | índice da célula em que o centro do tile caiu no quadro corrente |
 | `clientPointForTile(tx, ty)` | inversa exata: ponto de tela no centro do tile |
 | `teleport(x, y)` | põe o ator na posição e centraliza a câmera |
+| `setDestination(x, y)` | **ordena** ao ator controlável ir até o ponto (sem isso a auditoria não pode provar que o jogo contorna parede) |
+| `actorPosition()` | onde o ator controlável está agora |
 | `stepScene(input)` | **avança a cena um passo como o loop faz**, clamp da câmera incluso |
 | `setRows(n)`, `getRows()` | densidade ao vivo |
 | `renderOnce()` | desenha sem avançar a simulação (prova de quadro parado) |
@@ -121,7 +123,18 @@ render recebe `alpha` para interpolar.
 
 ### `actor` — locomoção
 `canStand` · `moveWithCollision` · `moveByInput` · `stepTowardTarget` ·
-`clearTarget` · `followCamera`. Colisão separada por eixo (desliza na parede).
+`setPath` · `dropPath` · `followPath` · `navigate` · `clearTarget` · `followCamera`.
+Colisão separada por eixo (desliza na parede). `followPath` percorre uma rota
+(ponto a ponto, sem passar do waypoint); `navigate` calcula a rota e já começa a
+andar. Teclado e `teleport` têm de **descartar a rota**, senão ela retoma depois.
+
+### `path` — rotas no grid
+`find(grid, x0, y0, x1, y1, opcoes)` · `hasLineOfSight` · `nearestWalkable` ·
+`signature(pontos)`. A* com custos **inteiros** (reto 1000, diagonal 1414): o
+desempate por índice faz a mesma pergunta dar sempre a mesma rota, que é o que a
+auditoria exige. Um destino dentro de parede não é recusado: vai para o piso
+andável mais próximo (`nearestWalkable`), que é o que um clique no cenário pede.
+Separado de `actor`: jogo por turnos ou planejamento quer a busca sem a locomoção.
 
 ### `view` — ordem de desenho e culling
 `createWorldView(renderer, art)`. O `art` é uma tabela de callbacks:
@@ -147,7 +160,7 @@ a resolução do save) · `clamp(v, lo, hi)`.
 ### `headless` — invariantes sem browser
 `createHeadless({ createScene })` · `determinism(seed, passos)` ·
 `loopClosure(seed, passos)` · `projectionRoundTrip(n)` ·
-`culling(cols, rows, camX, camY, grid, margem)`.
+`culling(cols, rows, camX, camY, grid, margem)` · `paths(seed, casos)`.
 
 ## Invariantes que a auditoria cobra
 
@@ -170,7 +183,14 @@ a resolução do save) · `clamp(v, lo, hi)`.
 13. cópia do jogo: toda string declarada em `window.ISO.text` é desenhável pelo
     conjunto de glifos (um acento sem glifo vira espaço em silêncio);
 14. layout sem barra de rolagem em 1280×633 e 390×844, culling ainda exato depois;
-15. console e `window.onerror` limpos.
+15. console e `window.onerror` limpos;
+16. rotas: nenhum waypoint dentro de parede, destino bloqueado vai para o piso ao
+    lado, e a mesma pergunta dá sempre a mesma rota (impressão digital no relatório);
+17. rota atrás de parede: a auditoria **primeiro acha** um destino cuja linha reta
+    está bloqueada (senão a prova seria vazia) e depois dirige o ator só pelo
+    contrato até lá, amostrando a cada tique que ele nunca está dentro da parede.
+
+São **35 checagens** no jogo de exemplo (46 na cripta, contando as do jogo).
 
 `--negative-control` quebra a malha numa cópia da página e exige que a checagem
 9 **falhe** ali. Um teste que nunca falhou não prova nada.
@@ -200,6 +220,15 @@ Cada uma custou uma rodada de investigação; estão aqui para não custarem de 
 - **Tremor vertical só existe quando o passo do tile em células não é inteiro**
   (10×3 → 1,5): com passo inteiro (8×2 → 1) toda malha é rígida e a checagem passa
   trivialmente. Diga isso no relatório em vez de fingir prova.
+- **Custos de rota em inteiro, e desempate explícito.** Com `float` duas rotas
+  diferentes empatam por acidente e a "mesma" pergunta passa a dar respostas
+  diferentes entre rodadas; o A* usa 1000/1414 e desempata pelo índice do tile.
+- **Rota pendente sobrevive ao teclado e ao `teleport`.** Se o jogo não chamar
+  `dropPath` quando o jogador assume o controle (tecla) ou quando reposiciona o
+  ator, a rota velha retoma do nada e o corpo anda para trás no quadro seguinte.
+- **Um teste de rota só prova algo se o destino estiver atrás de parede.** A
+  auditoria procura um destino com linha reta bloqueada e só então dirige; num
+  mundo sem paredes ela falha alto em vez de passar em silêncio.
 - **`PYTHONPATH` no ambiente Hermes aponta para `site-packages` de outro Python** e
   quebra `playwright`/`PIL` em venv: rode `PYTHONPATH= /venv/bin/python3 script.py`.
 - **Caractere sem glifo vira espaço em silêncio.** O conjunto de glifos precisa

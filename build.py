@@ -43,6 +43,7 @@ MODULES = [
     "render/text_renderer.js",
     "render/world_view.js",
     "sim/grid.js",
+    "sim/pathfind.js",
     "sim/actor.js",
     "sim/headless.js",
     "ui/hud.js",
