@@ -48,9 +48,9 @@ PYTHONPATH= ... tools/audit_engine.py --html ~/Projetos/cripta/cripta.html
 PYTHONPATH= ... tools/audit_engine.py --negative-control   # prova que a checagem pode falhar
 ```
 
-27 checagens num Chromium de verdade — projeção, determinismo, emenda, culling
+28 checagens num Chromium de verdade — projeção, determinismo, emenda, culling
 exato, custo por quadro, malha rígida, rolagem suave, arte estável, HUD sobreposto,
-layout em 1280 e 390 px. Lista completa em `docs/engine.md`.
+cópia desenhável, layout em 1280 e 390 px. Lista completa em `docs/engine.md`.
 
 O prefixo `PYTHONPATH=` é obrigatório neste ambiente: a variável aponta para o
 `site-packages` de outro Python e quebra a importação do Playwright.

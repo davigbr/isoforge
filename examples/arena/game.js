@@ -24,6 +24,19 @@ Isoforge.configure({ tileCellsW: 8, tileCellsH: 2, wallHeightCells: 2 });
   var HERO_RADIUS = 0.3;
   var DRONE_PERIODS = [100, 150, 200, 300, 600];   // every one divides 600
 
+  // The copy the player reads, in one table. Declared to the engine through
+  // debug.text so the audit can check every character of it against the glyph set.
+  var ARENA_TEXT = {
+    title: "arena",
+    fps: "fps",
+    p95: "quadro p95",
+    tick: "tique",
+    seed: "semente",
+    hero: "herói",
+    panel: "painel",
+    hint: "W A S D andar · clique no chão caminha até o tile · − / + resolução · F tela cheia"
+  };
+
   // --- palette ---------------------------------------------------------------
   // Every colour goes through the engine's boost exactly once: a glyph covers
   // only part of its cell, so unboosted ink reads as a near-black screen.
@@ -295,18 +308,18 @@ Isoforge.configure({ tileCellsW: 8, tileCellsH: 2, wallHeightCells: 2 });
       },
       panels: function (metrics, state) {
         return [{
-          x: 1, y: 1, width: 28, height: 8, title: "arena",
+          x: 1, y: 1, width: 28, height: 8, title: ARENA_TEXT.title,
           rows: [
-            { label: "fps", value: state.fps },
-            { label: "quadro p95", value: state.p95 },
-            { label: "tique", value: state.tick },
-            { label: "semente", value: state.seed },
-            { label: "herói", value: state.heroTile },
-            { label: "painel", value: state.cells }
+            { label: ARENA_TEXT.fps, value: state.fps },
+            { label: ARENA_TEXT.p95, value: state.p95 },
+            { label: ARENA_TEXT.tick, value: state.tick },
+            { label: ARENA_TEXT.seed, value: state.seed },
+            { label: ARENA_TEXT.hero, value: state.heroTile },
+            { label: ARENA_TEXT.panel, value: state.cells }
           ]
         }];
       },
-      hint: "W A S D andar · clique no chão caminha até o tile · − / + resolução · F tela cheia"
+      hint: ARENA_TEXT.hint
     });
 
     function metrics() { return renderer.metrics(); }
@@ -469,6 +482,7 @@ Isoforge.configure({ tileCellsW: 8, tileCellsH: 2, wallHeightCells: 2 });
       },
       loop: loop,
       headless: Isoforge.headless({ createScene: createArena }),
+      text: ARENA_TEXT,
       debug: {
         errors: errors,
         hoveredTile: hoveredTile,

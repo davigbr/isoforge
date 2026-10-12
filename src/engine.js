@@ -25,6 +25,7 @@ function engineSurface() {
     text: {
       createTextRenderer: createTextRenderer,
       glyphIndex: glyphIndex,
+      missingGlyphs: missingGlyphs,
       rampIndexAt: rampIndexAt,
       glyphs: GLYPHS,
       spaceIndex: SPACE_INDEX,
@@ -124,7 +125,7 @@ var CONTRACT_MEMBERS = [
   "stepScene", "loop", "headless", "debug"
 ];
 
-var CONTRACT_OPTIONAL = ["hudStats", "world", "sim", "hoveredTile"];
+var CONTRACT_OPTIONAL = ["hudStats", "world", "sim", "hoveredTile", "text"];
 
 function contractMissing(parts) {
   var missing = [];

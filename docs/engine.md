@@ -167,8 +167,10 @@ a resolução do save) · `clamp(v, lo, hi)`.
     na maioria dos quadros;
 11. arte estável: o mesmo tile pinta as mesmas células depois de a câmera andar;
 12. HUD parado enquanto o mundo rola por baixo;
-13. layout sem barra de rolagem em 1280×633 e 390×844, culling ainda exato depois;
-14. console e `window.onerror` limpos.
+13. cópia do jogo: toda string declarada em `window.ISO.text` é desenhável pelo
+    conjunto de glifos (um acento sem glifo vira espaço em silêncio);
+14. layout sem barra de rolagem em 1280×633 e 390×844, culling ainda exato depois;
+15. console e `window.onerror` limpos.
 
 `--negative-control` quebra a malha numa cópia da página e exige que a checagem
 9 **falhe** ali. Um teste que nunca falhou não prova nada.
@@ -200,3 +202,15 @@ Cada uma custou uma rodada de investigação; estão aqui para não custarem de 
   trivialmente. Diga isso no relatório em vez de fingir prova.
 - **`PYTHONPATH` no ambiente Hermes aponta para `site-packages` de outro Python** e
   quebra `playwright`/`PIL` em venv: rode `PYTHONPATH= /venv/bin/python3 script.py`.
+- **Caractere sem glifo vira espaço em silêncio.** O conjunto de glifos precisa
+  cobrir a língua da cópia do jogo (acentos, hífen tipográfico −, aspas curvas): a
+  interface em português exibia "resolu o" e "ch o" e nenhum teste pegava, porque
+  em revisão de código a string estava certa. `Isoforge.text.missingGlyphs(text)`
+  responde o que não seria desenhado, e a auditoria varre `window.ISO.text` com ele.
+- **Os módulos do jogo compartilham o escopo**: `var ISO = Isoforge.iso` num arquivo
+  e `window.ISO = <contrato>` em outro são o MESMO binding, e o alias é
+  sobrescrito no boot (a arte quebrava no primeiro quadro com "handleHalfW is not a
+  function"). O build do jogo envolve tudo num IIFE; só o contrato é global.
+- **Um check que falha por carga da máquina não é regressão**: o critério de engasgo
+  (≤1% dos quadros acima de dois vsyncs) mede 0 em 154 quadros numa rodada limpa e
+  até 2% com outro Chromium rodando ao lado. Re-rode antes de investigar.

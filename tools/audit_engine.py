@@ -267,9 +267,12 @@ def engine_checks(page, html_path, report_png=None):
     # vertically, two groups of tiles crossing the rounding threshold at
     # different phases). With an integer pitch (8x2 -> 1 cell) every lattice is
     # rigid and this check passes trivially -- say so instead of implying proof.
+    # The pitch must come from the CONFIGURED geometry: reading it back from
+    # tileCell() gives rounded cells, and 1.5 shows up as 1 or 2 depending on the
+    # phase (which made the crypt look like an integer-pitch game).
     pitch = data(page, """(() => {
-      var a = window.ISO.tileCell(10, 10), b = window.ISO.tileCell(11, 10), c = window.ISO.tileCell(10, 11);
-      return {x: Math.abs(b.x - a.x), y: Math.abs(c.y - a.y)};
+      var cells = window.ISO.debug.constants.tileCells;
+      return {x: cells[0] / 2, y: cells[1] / 2};
     })()""")
     fractional_pitch = (pitch["x"] % 1 != 0) or (pitch["y"] % 1 != 0)
     check("rigid lattice: the cell distance between fixed tiles never varies while the camera moves",
@@ -303,8 +306,11 @@ def engine_checks(page, html_path, report_png=None):
       var offsets = [];
       for (var oy = -4; oy <= 4; oy++) for (var ox = -5; ox <= 5; ox++) offsets.push([ox, oy]);
       function find(wantSolid) {
-        for (var r = 1; r < 4; r++) {
-          for (var a = -3; a <= 3; a++) {
+        // Search wide: a game can spawn the player in the middle of a clearing,
+        // and "no solid tile within 3 rows" would crash the sample instead of
+        // measuring anything.
+        for (var r = 1; r < 16; r++) {
+          for (var a = -9; a <= 9; a++) {
             var tx = Math.floor(cam.x) + a, ty = Math.floor(cam.y) + (wantSolid ? r : -r);
             if (tx < 1 || ty < 1 || tx >= g.width - 1 || ty >= g.height - 1) continue;
             if (wantSolid === !g.isWalkableTile(tx, ty)) return [tx, ty];
@@ -354,10 +360,11 @@ def engine_checks(page, html_path, report_png=None):
     rounds = []
     # Shifts chosen to cross the content lattice (8 cells) in both axes: the
     # camera moves in tiles, the lattice in cells, and the tile is 8x2 cells here.
-    for dx, dy in ((2.2, -1.4), (2.0, 1.1), (-6.5, 2.3)):
-        page.evaluate("window.ISO.camera.x += %f; window.ISO.camera.y += %f;" % (dx, dy))
-        page.evaluate("window.ISO.renderOnce()")
-        rounds.append(data(page, SAMPLE_DIFF))
+    if art["solidTile"] and art["floorTile"]:
+        for dx, dy in ((2.2, -1.4), (2.0, 1.1), (-6.5, 2.3)):
+            page.evaluate("window.ISO.camera.x += %f; window.ISO.camera.y += %f;" % (dx, dy))
+            page.evaluate("window.ISO.renderOnce()")
+            rounds.append(data(page, SAMPLE_DIFF))
     page.evaluate("window.ISO.loop.start()")
 
     solid_diffs = sum(r["solid"]["n"] for r in rounds)
@@ -365,8 +372,9 @@ def engine_checks(page, html_path, report_png=None):
     first_diff = next((r["solid"]["first"] or r["floor"]["first"] for r in rounds
                        if (r["solid"]["first"] or r["floor"]["first"])), None)
     check("art stability: the same tile paints the same cells after the camera moves",
-          art["solidTile"] is not None and solid_diffs == 0 and floor_diffs == 0,
+          bool(art["solidTile"]) and bool(art["floorTile"]) and solid_diffs == 0 and floor_diffs == 0,
           {"cells": art["cells"], "rounds": len(rounds), "entitiesFrozen": art["entities"],
+           "solidTile": art["solidTile"], "floorTile": art["floorTile"],
            "solidDiff": solid_diffs, "floorDiff": floor_diffs, "firstDiff": first_diff})
 
     # 10. the HUD is an overlay: it must not travel with the world ------------
@@ -431,6 +439,27 @@ def engine_checks(page, html_path, report_png=None):
           and world_probe["cells"] == world_probe["expectedCells"],
           world_probe)
 
+    # 10b. every string the game declares must be drawable --------------------
+    # A character with no glyph in the set is replaced by a SPACE in silence, so a
+    # missing accent ships as a typo nobody can see in code review. The game
+    # declares its copy in debug.text; this walks all of it.
+    copy = data(page, """(() => {
+      var text = window.ISO.text;
+      if (!text) return {declared: false};
+      var values = [], absent = {};
+      for (var key in text) {
+        if (!Object.prototype.hasOwnProperty.call(text, key)) continue;
+        var value = String(text[key]);
+        values.push(key);
+        var missing = Isoforge.text.missingGlyphs(value);
+        if (missing.length) absent[key] = missing.join("");
+      }
+      return {declared: true, keys: values.length, absent: absent};
+    })()""")
+    check("copy: every player-facing string the game declares is drawable by the glyph set",
+          (not copy["declared"]) or not copy["absent"],
+          {"declared": copy["declared"], "keys": copy.get("keys", 0), "absent": copy.get("absent", {})})
+
     # 11. layout: no scrollbar, grid covering the screen -----------------------
     page.set_viewport_size({"width": 1280, "height": 633})
     settle(page, 700)
@@ -481,7 +510,7 @@ def engine_checks(page, html_path, report_png=None):
     }
 
 
-def negative_control(html_path):
+def negative_control(html_path, browser=None):
     """Break the frame lattice in a copy of the built page and assert the rigidity
     check FAILS there. Without this, a green rigidity check is only an opinion.
 
@@ -493,21 +522,33 @@ def negative_control(html_path):
         fractional number of cells (10x3 -> 1.5); with an integer pitch every
         lattice is rigid, so the control reports the immunity instead of asserting
         a failure it can never produce.
+
+    `browser` lets a caller that already drives Playwright pass its own instance:
+    the sync API refuses to open a second context while another one is live.
     """
     with open(html_path, encoding="utf-8") as handle:
         source = handle.read()
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 633})
+    def with_page(target, viewport=(1280, 633)):
+        """A page on `target`, reusing the caller's browser when there is one: the
+        Playwright sync API refuses to start a second session inside a live one."""
+        if browser is not None:
+            return browser.new_page(viewport={"width": viewport[0], "height": viewport[1]}), None
+        local = sync_playwright().start()
+        return local.chromium.launch().new_page(viewport={"width": viewport[0], "height": viewport[1]}), local
+
+    page, local = with_page(html_path)
+    try:
         page.goto("file://" + os.path.abspath(html_path) + "#seed=1234", wait_until="load")
         page.bring_to_front()
         page.wait_for_timeout(1500)
         pitch = json.loads(page.evaluate("""JSON.stringify((() => {
-          var a = window.ISO.tileCell(10, 10), b = window.ISO.tileCell(11, 10), c = window.ISO.tileCell(10, 11);
-          return {x: Math.abs(b.x - a.x), y: Math.abs(c.y - a.y)};
+          var cells = window.ISO.debug.constants.tileCells;
+          return {x: cells[0] / 2, y: cells[1] / 2};
         })())"""))
-        browser.close()
+    finally:
+        page.close()
+        if local is not None: local.stop()
 
     if pitch["x"] % 1 == 0 and pitch["y"] % 1 == 0:
         check("negative control: not applicable (the tile pitch is a whole number of cells, so this "
@@ -515,36 +556,45 @@ def negative_control(html_path):
               True, {"tilePitchCells": pitch})
         return {"applicable": False, "pitch": pitch}
 
-    pattern = r"x:\s*Math\.round\(snapped\.x / LATTICE_QUANTUM\) \* LATTICE_QUANTUM,\s*\n\s*y:\s*Math\.round\(snapped\.y / LATTICE_QUANTUM\) \* LATTICE_QUANTUM"
+    pattern = (r"function coarseLatticeCell\(camera\) \{\s*\n\s*var snapped = snappedCameraCell\(camera\);\s*\n"
+               r"\s*return \{\s*\n\s*x:\s*Math\.round\(snapped\.x / LATTICE_QUANTUM\) \* LATTICE_QUANTUM,\s*\n"
+               r"\s*y:\s*Math\.round\(snapped\.y / LATTICE_QUANTUM\) \* LATTICE_QUANTUM\s*\n\s*\};\s*\n\s*\}")
     if not re.search(pattern, source):
         print("negative control: lattice pattern not found, skipping")
         return None
-    broken = re.sub(pattern, "x: snapped.x,\n    y: snapped.y", source, count=1)
+    # What has to go is the QUANTISATION of the whole frame. Removing only the
+    # quantum leaves the camera snap, and the snap alone is already rigid: the
+    # tile positions then jump by whole cells together, so the distance between
+    # two fixed tiles never varies. The control has to make the lattice phase
+    # drift CONTINUOUSLY with the camera, which is what the original bug was.
+    broken = re.sub(pattern,
+                    "function coarseLatticeCell(camera) {\n"
+                    "  return { x: worldToCellX(camera.x, camera.y), y: worldToCellY(camera.x, camera.y) };\n"
+                    "}", source, count=1)
     handle, path = tempfile.mkstemp(suffix=".html", dir=os.path.dirname(html_path))
     with os.fdopen(handle, "w", encoding="utf-8") as temp:
         temp.write(broken)
+    page, local = with_page(path)
     try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
-            page = browser.new_page(viewport={"width": 1280, "height": 633})
-            page.goto("file://" + path + "#seed=1234", wait_until="load")
-            page.bring_to_front()
-            page.wait_for_timeout(1500)
-            page.evaluate("""(() => {
-              window.__rig = {samples: []};
-              var ISO = window.ISO, n = 0;
-              function sample() {
-                var a = ISO.tileCell(10, 10), b = ISO.tileCell(10, 25), c = ISO.tileCell(25, 6);
-                window.__rig.samples.push({aby: a.y - b.y, acy: a.y - c.y});
-                if (++n < 80) requestAnimationFrame(sample);
-              }
-              requestAnimationFrame(sample);
-            })()""")
-            page.evaluate(DRIVE_STEPS % (70, 1.0, 1.0))
-            page.wait_for_timeout(1600)
-            samples = json.loads(page.evaluate("JSON.stringify(window.__rig.samples)"))
-            browser.close()
+        page.goto("file://" + path + "#seed=1234", wait_until="load")
+        page.bring_to_front()
+        page.wait_for_timeout(1500)
+        page.evaluate("""(() => {
+          window.__rig = {samples: []};
+          var ISO = window.ISO, n = 0;
+          function sample() {
+            var a = ISO.tileCell(10, 10), b = ISO.tileCell(10, 25), c = ISO.tileCell(25, 6);
+            window.__rig.samples.push({aby: a.y - b.y, acy: a.y - c.y});
+            if (++n < 80) requestAnimationFrame(sample);
+          }
+          requestAnimationFrame(sample);
+        })()""")
+        page.evaluate(DRIVE_STEPS % (70, 1.0, 1.0))
+        page.wait_for_timeout(1600)
+        samples = json.loads(page.evaluate("JSON.stringify(window.__rig.samples)"))
     finally:
+        page.close()
+        if local is not None: local.stop()
         os.unlink(path)
     values = sorted({s["aby"] for s in samples})
     check("negative control: with the frame lattice broken the grid DOES shimmer",

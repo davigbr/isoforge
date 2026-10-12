@@ -22,7 +22,13 @@ var GLYPH_RAMP = " .'-:_,^=;><+!rc*/z?sLTv)J7(|Fi{C}fI31tlu[neoZ5Yxjya]2ESwqkP6h
 var GLYPH_SOLID = "░▒▓█";
 var GLYPH_BOX = "╔╗╚╝═║╠╣╦╩╬┌┐└┘─│├┤┬┴┼";
 var GLYPH_MARK = "●○◆◇▪▫°·×÷≠";
-var GLYPH_TEXT = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ .,:%+-/()[]<>!?*#♥";
+// Accented Latin is part of the TEXT set on purpose: the game's player-facing copy
+// is Portuguese, and a character with no glyph is replaced by a SPACE in silence
+// (that is how "resolução" rendered as "resolu o" until the audit learned to look
+// at the copy the game declares). A game in another language adds its glyphs here.
+var GLYPH_TEXT = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ .,:%+-/()[]<>!?*#♥"
+  + "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑºª"
+  + "−–—…’‘“”";   // typographic minus/dashes/quotes: they creep into player copy
 var GLYPHS = GLYPH_RAMP + GLYPH_SOLID + GLYPH_BOX + GLYPH_MARK + GLYPH_TEXT;
 
 // First occurrence wins, so a ramp character always maps back to its ramp index.
@@ -47,6 +53,22 @@ var RAMP_LENGTH = GLYPH_RAMP.length;
 function glyphIndex(character) {
   var index = GLYPH_INDEX[character];
   return index === undefined ? SPACE_INDEX : index;
+}
+
+// Characters that would be drawn as a SPACE because the set has no glyph for
+// them. A game should call this over its own copy at boot: a missing accent is
+// invisible in code review and very visible on screen.
+function missingGlyphs(text) {
+  var absent = [];
+  var seen = {};
+  text = String(text);
+  for (var i = 0; i < text.length; i++) {
+    var character = text.charAt(i);
+    if (character === " " || seen[character]) continue;
+    seen[character] = true;
+    if (GLYPH_INDEX[character] === undefined) absent.push(character);
+  }
+  return absent;
 }
 
 // Ramp index from a 0..1 intensity: the ASCII recipe from the ship (gamma 1.9).
