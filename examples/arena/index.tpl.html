@@ -3,19 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Isoforge — cripta em ASCII</title>
+<title>Isoforge — arena</title>
 <meta name="color-scheme" content="dark">
 <!--__STYLE__-->
 </head>
 <body>
 <!-- The world is one character grid. It slides by a sub-cell CSS transform while
      walking, so the HUD cannot live in the same grid: it would slide with it and
-     shake. The HUD is a second grid, stacked on top, never transformed, only
-     rewritten when one of its numbers changes. -->
+     shake. The HUD is a second grid, stacked on top, never transformed. -->
 <pre id="screen" tabindex="0" spellcheck="false"></pre>
 <pre id="hud" aria-hidden="true" spellcheck="false"></pre>
 <script>
-/*__MODULES__*/
+/*__ENGINE__*/
+</script>
+<script>
+/*__GAME__*/
 </script>
 </body>
 </html>

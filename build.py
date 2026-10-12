@@ -1,43 +1,66 @@
 #!/usr/bin/env python3
-"""Assemble the single-file deliverable.
+"""Isoforge engine build.
 
-Sources stay modular under src/; this script concatenates them into
-src/index.tpl.html and writes isoforge.html at the project root. The output is
-the only thing that ships: one file, no server, no bundler, no dependency.
+Two modes, one source tree:
 
-Usage: python3 build.py
+  python3 build.py                  engine artefact -> dist/
+      dist/isoforge.engine.js    the whole engine, wrapped in one IIFE namespace
+      dist/isoforge.engine.css   the grid stylesheet (world layer + HUD layer)
+      dist/VERSION               the engine version, for a game to pin
+
+  python3 build.py --example arena  a game built from the engine -> examples/
+      examples/arena/arena.html  engine + game inlined into one file
+
+A GAME never builds the engine: it vendors dist/ (see the cripta project's
+build.py). That is the point of the split -- the engine has its own build, its
+own tests and its own release artefact, and a game only consumes it.
+
+Why the artefact is a plain script and not an ES module: games have to open from
+file:// with two clicks, and file:// refuses module imports (CORS). So the engine
+is one IIFE assigning `var Isoforge`, and the build asserts the output never
+grows a canvas, an image, a network call or a module import.
 """
 
 import hashlib
-import json
 import os
+import re
 import subprocess
 import sys
-import tempfile
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(BASE, "src")
-OUT = os.path.join(BASE, "isoforge.html")
-ART_JSON = os.path.join(BASE, "assets", "art.json")
+ROOT = os.path.dirname(os.path.abspath(__file__))
+SRC = os.path.join(ROOT, "src")
+DIST = os.path.join(ROOT, "dist")
 
+# Dependency order matters: config first (everything reads it), engine.js last
+# (it returns the surface).
 MODULES = [
+    "core/config.js",
     "core/rng.js",
     "core/iso.js",
     "core/loop.js",
-    "world/grid.js",
-    "sim/sim.js",
+    "core/persist.js",
     "render/text_renderer.js",
-    "render/art.js",
     "render/world_view.js",
+    "sim/grid.js",
+    "sim/actor.js",
+    "sim/headless.js",
     "ui/hud.js",
-    "app.js",
+    "engine.js",
 ]
 
-# Phase 2 replaces the procedural shapes with templates sampled from the PIL
-# scene through the ship's pipeline; they travel as JSON through this anchor.
-ART_ANCHOR = "var ART_TEMPLATES = null;"
-MODULE_MARKER = "/*__MODULES__*/"
+ENGINE_MARKER = "/*__ENGINE__*/"
+GAME_MARKER = "/*__GAME__*/"
 STYLE_MARKER = "<!--__STYLE__-->"
+
+# A build that grows one of these has broken the offline, text-only promise.
+FORBIDDEN = [
+    ("<canvas", "canvas element"),
+    ("data:image", "inlined image"),
+    ("http://", "network URL"),
+    ("https://", "network URL"),
+    ("import ", "ES module import"),
+    ("fetch(", "network call"),
+]
 
 
 def read(path):
@@ -45,73 +68,122 @@ def read(path):
         return handle.read()
 
 
-def main():
-    template = read(os.path.join(SRC, "index.tpl.html"))
-    styles = read(os.path.join(SRC, "styles.css"))
+def write(path, text):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
 
+
+def check_syntax(javascript, label):
+    """A syntax error inside a single-file game fails SILENTLY in the browser:
+    blank page, empty console. node --check is the only cheap way to catch it."""
+    if subprocess.run(["node", "--version"], capture_output=True).returncode != 0:
+        print("  script    : node not found, syntax check skipped")
+        return
+    probe = os.path.join(ROOT, ".build-probe.js")
+    write(probe, javascript)
+    result = subprocess.run(["node", "--check", probe], capture_output=True, text=True)
+    os.unlink(probe)
+    if result.returncode != 0:
+        sys.exit("syntax error in %s:\n%s" % (label, (result.stderr or result.stdout).strip()))
+    print("  script    : node --check ok")
+
+
+def assert_clean(text, label):
+    lowered = text.lower()
+    for needle, what in FORBIDDEN:
+        if needle in lowered:
+            sys.exit("%s contains a %s (%r): the offline text-only promise is broken"
+                     % (label, what, needle))
+    print("  offline   : no canvas, no image, no network, no module")
+
+
+def engine_version():
+    found = re.search(r'ENGINE_VERSION\s*=\s*"([^"]+)"', read(os.path.join(SRC, "core", "config.js")))
+    if not found:
+        sys.exit("ENGINE_VERSION not found in src/core/config.js")
+    return found.group(1)
+
+
+def assert_markers(template, *markers):
+    for marker in markers:
+        if template.count(marker) != 1:
+            sys.exit("template marker %s must appear exactly once (%d)"
+                     % (marker, template.count(marker)))
+
+
+def build_engine():
     chunks = []
     for module in MODULES:
         path = os.path.join(SRC, module)
         if not os.path.exists(path):
-            sys.exit("missing module: %s" % module)
-        chunks.append("// ==== %s ====\n%s" % (module, read(path).rstrip() + "\n"))
-    script = "\n".join(chunks)
+            sys.exit("missing engine module: %s" % module)
+        chunks.append("// ---- %s %s\n%s" % (module, "-" * max(0, 66 - len(module)), read(path).rstrip()))
 
-    if script.count(ART_ANCHOR) != 1:
-        sys.exit("art anchor not found exactly once (%d)" % script.count(ART_ANCHOR))
-    if os.path.exists(ART_JSON):
-        with open(ART_JSON, encoding="utf-8") as handle:
-            payload = handle.read()
-        json.loads(payload)          # fail the build on malformed art
-        script = script.replace(ART_ANCHOR, "var ART_TEMPLATES = %s;" % payload)
-        art_state = "templates injected from assets/art.json (%d KB)" % (len(payload) // 1024)
-    else:
-        script = script.replace(
-            ART_ANCHOR,
-            "var ART_TEMPLATES = (null);  // built: procedural art (no assets/art.json yet)",
-        )
-        art_state = "procedural art in art.js (no assets/art.json)"
+    version = engine_version()
+    javascript = (
+        "// Isoforge %s -- 2:1 isometric, text-mode, deterministic, offline.\n"
+        "// Assembled from src/ by build.py. DO NOT EDIT: edit the modules and rebuild.\n"
+        "var Isoforge = (function () {\n"
+        "\"use strict\";\n\n%s\n\nreturn engineSurface();\n})();\n"
+    ) % (version, "\n\n".join(chunks))
 
-    if template.count(MODULE_MARKER) != 1 or template.count(STYLE_MARKER) != 1:
-        sys.exit("template markers must appear exactly once")
+    write(os.path.join(DIST, "isoforge.engine.js"), javascript)
+    write(os.path.join(DIST, "isoforge.engine.css"), read(os.path.join(SRC, "engine.css")))
+    write(os.path.join(DIST, "VERSION"), version + "\n")
 
-    html = template.replace(STYLE_MARKER, "<style>\n%s\n</style>" % styles.rstrip())
-    html = html.replace(MODULE_MARKER, script)
+    check_syntax(javascript, "isoforge.engine.js")
+    assert_clean(javascript, "isoforge.engine.js")
+    print("built dist/isoforge.engine.js")
+    print("  version   : %s" % version)
+    print("  size      : %.1f KB" % (len(javascript.encode("utf-8")) / 1024))
+    print("  sha1      : %s" % hashlib.sha1(javascript.encode("utf-8")).hexdigest())
+    print("  modules   : %d" % len(MODULES))
 
-    for marker in (MODULE_MARKER, STYLE_MARKER, ART_ANCHOR):
+
+def build_example(name):
+    directory = os.path.join(ROOT, "examples", name)
+    if not os.path.isdir(directory):
+        sys.exit("no such example: %s" % name)
+
+    engine_js = read(os.path.join(DIST, "isoforge.engine.js"))
+    engine_css = read(os.path.join(DIST, "isoforge.engine.css"))
+    template = read(os.path.join(directory, "index.tpl.html"))
+    game_js = read(os.path.join(directory, "game.js"))
+    game_css = read(os.path.join(directory, "styles.css")) if os.path.exists(
+        os.path.join(directory, "styles.css")) else ""
+
+    assert_markers(template, ENGINE_MARKER, GAME_MARKER, STYLE_MARKER)
+    html = template.replace(STYLE_MARKER, "<style>\n%s\n%s\n</style>" % (engine_css.rstrip(), game_css.rstrip()))
+    html = html.replace(ENGINE_MARKER, engine_js.rstrip())
+    html = html.replace(GAME_MARKER, game_js.rstrip())
+    for marker in (ENGINE_MARKER, GAME_MARKER, STYLE_MARKER):
         if marker in html:
             sys.exit("marker survived the build: %s" % marker)
-    if html.count("</script>") != 1:
-        sys.exit("expected exactly one closing script tag")
-    if "<canvas" in html:
-        sys.exit("the engine is text-only: no canvas allowed in the build")
-    if "data:image" in html:
-        sys.exit("the engine is text-only: no embedded image allowed in the build")
 
-    # Syntax check before shipping: a syntax error inside the single file fails
-    # silently in the browser and the page just stays blank.
-    start = html.index("<script>") + len("<script>")
-    end = html.index("</script>", start)
-    handle, temp_path = tempfile.mkstemp(suffix=".js")
-    with os.fdopen(handle, "w", encoding="utf-8") as temp:
-        temp.write(html[start:end])
-    check = subprocess.run(["node", "--check", temp_path], capture_output=True, text=True)
-    os.unlink(temp_path)
-    if check.returncode != 0:
-        sys.exit("assembled script has a syntax error:\n%s" % (check.stderr or check.stdout))
-
-    with open(OUT, "w", encoding="utf-8") as handle:
-        handle.write(html)
-
-    digest = hashlib.sha1(html.encode("utf-8")).hexdigest()
-    print("built %s" % os.path.relpath(OUT, BASE))
+    out = os.path.join(directory, "%s.html" % name)
+    write(out, html)
+    check_syntax(engine_js + "\n" + game_js, "%s.js" % name)
+    assert_clean(html, "%s.html" % name)
+    print("built examples/%s/%s.html" % (name, name))
+    print("  engine    : %s" % engine_version())
     print("  size      : %.1f KB" % (len(html.encode("utf-8")) / 1024))
-    print("  sha1      : %s" % digest)
-    print("  modules   : %d" % len(MODULES))
-    print("  art       : %s" % art_state)
-    print("  text-only : no canvas, no image")
-    print("  script    : node --check ok")
+    print("  sha1      : %s" % hashlib.sha1(html.encode("utf-8")).hexdigest())
+    print("  open      : file://%s" % out)
+
+
+def main(argv):
+    if "--example" in argv:
+        index = argv.index("--example")
+        name = argv[index + 1] if len(argv) > index + 1 else "arena"
+        print("isoforge %s -- example %s" % (engine_version(), name))
+        build_example(name)
+        return
+    print("isoforge %s -- engine" % engine_version())
+    build_engine()
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

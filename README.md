@@ -1,110 +1,103 @@
 # Isoforge
 
-**Motor de jogos isométricos em arte ASCII** (projeção 2:1 fixa, **sem rotação de tela**) para o
-browser. Roda offline, abre com dois cliques e não tem dependência nenhuma. O arquivo entregue não
-tem canvas nem imagem: a tela inteira é **uma grade de caracteres com cor por célula**, no mesmo
-pipeline do protótipo do navio pirata.
+Motor de jogo isométrico 2:1 em **arte de texto** para o browser. Roda offline por
+`file://`, sem dependência, sem bundler, sem servidor. A tela é uma grade de
+caracteres com cor por célula; não há canvas nem imagem em lugar nenhum.
 
-Plano completo: `.hermes/plans/2026-10-12_080752-isoforge-motor-isometrico.md`
+Este repositório é o **motor**. Os jogos ficam em projetos próprios e consomem o
+build daqui (`dist/`), como `~/Projetos/cripta/`.
 
-## Como rodar
-
-```bash
-python3 build.py          # gera isoforge.html a partir de src/
-open isoforge.html        # ou dois cliques no Finder
+```
+src/core/config.js           configuração + geometria derivada (tamanho de tile etc.)
+src/core/rng.js              mulberry32 determinístico
+src/core/iso.js              projeção 2:1 em células, malha do quadro, culling
+src/core/loop.js             passo fixo 60 Hz, hash FNV-1a, métricas de quadro
+src/core/persist.js          localStorage com namespace
+src/render/text_renderer.js  a grade de caracteres: plot, polígono, linha, present
+src/render/world_view.js     ordem de desenho + culling, arte vinda do jogo
+src/sim/grid.js              a grade-mundo: bitmap andável, conectividade, spawn
+src/sim/actor.js             locomoção com colisão por eixo + câmera que segue
+src/sim/headless.js          invariantes sem browser (determinismo, emenda, culling)
+src/ui/hud.js                painéis em box-drawing, conteúdo vindo do jogo
+src/engine.js                a superfície pública + o contrato de teste
+examples/arena/              um jogo completo em um arquivo, prova do corte
+tools/audit_engine.py        auditoria de invariantes, roda contra qualquer jogo
+docs/engine.md               referência da API
 ```
 
-`isoforge.html` é o único artefato que importa: um arquivo, offline, sem servidor. `src/` é a fonte
-modular; nunca editar o HTML gerado à mão. O build **falha de propósito** se o resultado tiver
-`<canvas`, `data:image` ou `http` — é o que garante "tudo em ASCII".
+## Build
 
-**O jogo roda 100% no browser.** Python aparece em três lugares, nenhum deles na execução:
-
-- `build.py` — concatena `src/` no HTML único e valida a sintaxe com `node --check` (erro de
-  sintaxe dentro do arquivo único falha em silêncio no browser: a página fica em branco).
-- `tools/looktest_iso_ascii.py` — teste de olhar: a mesma cripta em duas escalas de tile, amostrada
-  pelo pipeline do navio (PIL em 4× → média de área → rampa por luminância com gama 1.9 → cor por
-  célula).
-- `tools/audit_text.py` — a auditoria: navegador de verdade (Playwright) para medir fps, culling,
-  determinismo, clique e layout.
-
-```bash
-PYTHONPATH= ~/.hermes/hermes-agent/venv/bin/python3 tools/audit_text.py
+```sh
+python3 build.py                    # -> dist/isoforge.engine.js + .css + VERSION
+python3 build.py --example arena    # -> examples/arena/arena.html (motor + jogo)
 ```
 
-(O prefixo `PYTHONPATH=` é obrigatório neste ambiente: a variável aponta para o `site-packages` de
-outro Python e quebra a importação do Playwright/PIL.)
+O build valida a sintaxe com `node --check` (erro de sintaxe dentro do arquivo
+único falha **em silêncio** no browser) e **morre** se a saída ganhar `<canvas>`,
+`data:image`, `http://` ou import de módulo: o texto e o offline são requisito, não
+preferência.
 
-## Controles
+O artefato é um script simples, e não um módulo ES, porque `file://` recusa
+imports (CORS) e o jogo tem de abrir com dois cliques.
 
-`W A S D`/setas andar · clique no chão caminha até o tile · `F` tela cheia · `H` detalhes ·
-`R` nova semente · `G` regerar a mesma (prova visual do determinismo).
+## Auditoria
 
-## Arquitetura (texto)
+```sh
+PYTHONPATH= ~/.hermes/hermes-agent/venv/bin/python3 tools/audit_engine.py
+PYTHONPATH= ... tools/audit_engine.py --html ~/Projetos/cripta/cripta.html
+PYTHONPATH= ... tools/audit_engine.py --negative-control   # prova que a checagem pode falhar
+```
 
-| módulo | papel |
+27 checagens num Chromium de verdade — projeção, determinismo, emenda, culling
+exato, custo por quadro, malha rígida, rolagem suave, arte estável, HUD sobreposto,
+layout em 1280 e 390 px. Lista completa em `docs/engine.md`.
+
+O prefixo `PYTHONPATH=` é obrigatório neste ambiente: a variável aponta para o
+`site-packages` de outro Python e quebra a importação do Playwright.
+
+## O que é um jogo
+
+`examples/arena/game.js`: ~200 linhas, um arquivo, nenhum arquivo do motor tocado.
+Ele também prova que a geometria é parâmetro — a arena pede tiles de 8×2 células e
+paredes de 2 células, onde a cripta usa 10×3 e 4.
+
+## Geometria configurável (e uma armadilha que ela revelou)
+
+`Isoforge.configure({ tileCellsW, tileCellsH, wallHeightCells, latticeQuantum, ... })`.
+O tamanho do tile é parâmetro, não constante: 10×3 numa fonte ~0.6em dá exatamente
+2:1 em pixels (a proporção do tile 64×32 do Diablo 2).
+
+Foi pedir 8×2 na arena que apareceu um defeito real do motor: a margem do retângulo
+de culling estava fixa em 3 tiles, valor certo para 10×3 e insuficiente para 8×2
+(um tile na borda ficava de fora — o desenhado saía exatamente um a menos que o
+geométrico). Agora `iso.requiredTileMargin()` deriva a margem da geometria, e a
+checagem "margem do culling" que existe por causa disso está em `docs/engine.md`.
+
+## Decisões que sustentam o motor
+
+| decisão | por quê |
 |---|---|
-| `src/core/iso.js` | projeção 2:1 em **células** (10×3 células por tile = 66×33 px), inversa exata, câmera, clamp, culling |
-| `src/core/loop.js` | passo fixo de 60 Hz, acumulador, medidor p50/p95, hash FNV-1a |
-| `src/world/grid.js` | grade andável, variante de piso, flood fill da maior região |
-| `src/sim/sim.js` | simulação determinística + pontos de entrada da auditoria |
-| `src/render/text_renderer.js` | grade de caracteres, polígono/linha em células, corridas de cor, **cache por linha** |
-| `src/render/art.js` | a cripta em glifos (piso, parede, pilar, tocha, ossada, herói, monstro, cursor) |
-| `src/render/world_view.js` | caminha os tiles visíveis e pinta na ordem de pintura (x+y, desempate x) |
-| `src/ui/hud.js` | HUD de **box-drawing dentro da grade** (sem overlay de DOM) |
-
-## Contrato de performance
-
-- Simulação em passo fixo de 60 Hz; render desacoplado com interpolação.
-- Alvo: **p95 de quadro < 25 ms** e **render p95 < 8 ms**. Medido: parado render p95 **1,6 ms**;
-  andando **4,3 ms**; p95 de quadro **17,6 ms**.
-- O custo de DOM é proporcional ao que mudou na tela: **0 bytes por quadro parado**, 16 KB de 176 KB
-  andando (6 de 69 linhas). Andar não reescreve a grade inteira — a câmera desloca uma fração de
-  célula por quadro, então só as linhas onde a fase de arredondamento vira mudam.
-- Regra que sustenta tudo isso: **corrida de cor longa é o que barateia um quadro de texto**. Cor
-  por célula (mesmo quantizada) quebra a corrida a cada célula; cor por tile dá corridas de 5–9.
-- `localStorage` em `file://` foi verificado: escreve, lê e persiste após reload. Namespace
-  obrigatório: `isoforge.v1.*` (todas as páginas locais dividem o mesmo balde de storage).
-
-## Resultado da auditoria (26/26)
-
-| medida | resultado |
-|---|---|
-| grade em 1440×900 | 184 × 69 células (fonte 13,0 px) |
-| fps | 59,9 (p50 16,7 ms · p95 17,6 ms) |
-| culling | tiles desenhados == tiles que tocam a tela, sem furo |
-| determinismo | hashes idênticos em 2 execuções de 600 passos |
-| emenda | passo 600 ≡ passo 0 |
-| velocidade | 4,2 tiles/s exatos |
-| clique | célula clicada == tile do destino |
-| layout | sem barra de rolagem em 1440×900, 1280×633 e 390×844 |
-| arquivo | 61,7 KB, sem canvas, sem imagem, sem rede |
-
-## Rolagem suave (medido, não estético)
-
-Três defeitos reais desta fase, todos achados jogando e todos com medição antes/depois:
-
-| sintoma | causa | conserto | antes → depois |
-|---|---|---|---|
-| tela tremia na vertical | cada tile era arredondado para a célula por conta própria; o passo vertical é 1,5 célula, então metade das linhas cruzava o limiar de arredondamento em fase diferente | a malha é quantizada **uma vez por quadro** e todo tile/prop/entidade/cursor usa a mesma | controle negativo: a distância entre tiles fixos oscilava entre −22 e −23 células → valor único |
-| cenário "regenerando" ao andar | a câmera anda ~42 células/s (4,2 tiles/s × 10 células), então o conteúdo era reconstruído 42×/s: **79 de 160 quadros reescreviam a grade inteira**, 5,5 MB/s de HTML | conteúdo ancorado numa **malha grossa (8 células)**; o resto do deslocamento vira `transform` de CSS, arredondado ao pixel do dispositivo (glifos nítidos) | 0 reconstruções completas; 28 KB/quadro; deslize em 79 de 89 quadros |
-| HUD tremia junto | o HUD estava desenhado **dentro da grade do mundo**, então deslizava com ela e voltava a cada passo da malha | HUD é uma **segunda grade sobreposta** (`#hud`), mesma fonte e mesma célula (os painéis alinham), mas sem transform nenhum e sem camada compositada | HUD anda 0 px enquanto o mundo anda 43 px |
-
-Uma quarta, achada na mesma rodada: a textura das paredes era sorteada a partir da **célula na tela**
-(`cx*3 + x`), então a pedra fervia a cada passo da malha. O hash agora é **tile + offset local da
-forma** — invariante sob deslocamento inteiro da malha, e coberto pela checagem *art stability*
-(99 células amostradas, 0 diferenças).
+| texto em vez de canvas | medido na mesma grade 214×69: DOM com corridas de cor p50 2,1 ms / p95 3,9 ms; canvas com atlas de glifos p50 9,4 ms / p95 49,4 ms |
+| conteúdo numa malha grossa + `transform` | a câmera anda ~42 células/s; reconstruir a grade a cada célula custava 5,5 MB/s de HTML. Agora: 0 reconstruções completas, ~28 KB/quadro |
+| HUD como segunda grade, sem transform | o HUD na grade do mundo deslizava junto e tremia; medido: 0 px de deriva do HUD contra 43 px do mundo |
+| hash de arte por tile + offset local | com a célula na tela, a pedra fervia a cada passo da malha |
+| margem de culling derivada da geometria | margem fixa de 3 tiles estava certa para 10×3 e errada para 8×2 |
+| `fps` pela mediana | `1000/frameMs` do último quadro reporta 0 num loop saudável |
+| `stop()` cancela o handle do rAF | sem isso, `stop()`+`start()` deixa duas correntes de quadro e o contador dobra (medido: 468 quadros em 5 s) |
 
 ## Regras do projeto
 
-- Código em inglês (ids, `data-*`, chaves de JSON, comentários, commits); texto visível ao jogador em
-  português.
-- Nada de dependência, módulo ES, `fetch` ou backend: o jogo precisa funcionar por `file://`.
-- Regenerável: todo artefato sai de um script (`build.py`, `tools/audit_text.py`,
-  `tools/looktest_iso_ascii.py`).
+- Código em inglês (identificadores, `data-*`, chaves, comentários, commits);
+  texto visível ao jogador fica na tabela de cópia do jogo.
+- Zero dependência, zero módulo ES, zero `fetch`: abrir por `file://` com dois cliques.
+- Regenerável: todo artefato sai de um script.
+- Nada de conteúdo de jogo no motor: se a cripta pode mudar sem tocar aqui, o corte
+  está certo.
 
 ## Estado
 
-Fase 0 concluída e auditada, **já no modo texto**. Falta: arte gerada por PIL amostrada para
-templates de caractere (`assets/art.json`, âncora `ART_TEMPLATES` já no build), A* de verdade,
-gerador de cripta em salas e corredores, um inimigo com IA e combate.
+Motor em 0.3.0, auditoria 27/27 na arena de exemplo. O plano da fase 0 e as decisões
+originais estão em `.hermes/plans/2026-10-12_080752-isoforge-motor-isometrico.md`.
+Pendente no motor: arte amostrada de cena PIL para templates de caractere (a âncora
+existe no build), A* de verdade e camada de entidades mais rica — os dois últimos
+provavelmente pedem um `sim/` próprio do jogo, não do motor.

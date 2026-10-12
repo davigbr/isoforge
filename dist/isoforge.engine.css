@@ -1,6 +1,8 @@
-/* Isoforge -- pure text. The page is a terminal: one <pre>, near black
-   background, no image and no canvas anywhere. Colour comes per cell, from the
-   renderer. */
+/* Isoforge engine stylesheet: everything the engine itself needs to be a
+   terminal. A game MUST NOT redefine these rules -- it inlines this file first
+   and only appends its own extras (a loading state, a font choice), because the
+   grid geometry the JS measures depends on them: fixed positioning, no margin,
+   no letter spacing, no kerning, one block per row. */
 
 html, body {
   margin: 0;
@@ -15,6 +17,10 @@ html, body {
   text-rendering: geometricPrecision;
 }
 
+/* World layer. The grid is deliberately LARGER than the viewport (the bleed
+   ring) and slides by a whole-device-pixel transform, so walking never
+   rewrites the grid: rebuilds happen once per lattice quantum, not once per
+   cell of camera travel. */
 #screen {
   position: fixed;
   top: 0;
@@ -33,17 +39,14 @@ html, body {
   user-select: none;
   outline: none;
   touch-action: none;
-  /* The grid is larger than the viewport and slides by a whole-pixel
-     transform: origin at the top-left, and no layout work per frame. */
   transform-origin: 0 0;
   will-change: transform;
 }
-
 #screen i { font-style: normal; }
 
-/* HUD layer: same font, same cell size, same grid -- so the panels line up with
-   the world's character cells -- but never transformed, so it stays still while
-   the world scrolls. Transparent except where a panel paints its own background.
+/* HUD layer: same font, same cell size, same grid -- so panels line up with the
+   world's character cells -- but never transformed, so it stays still while the
+   world scrolls. Transparent except where a panel paints its own background, and
    pointer-events:none so every mouse event still reaches the world grid. */
 #hud {
   position: fixed;

@@ -1,15 +1,34 @@
-// Walks the visible tiles and paints them into the character grid: floors first,
-// then walls, props and entities in painter's order (x + y, tie broken by x) --
-// the phase 0 draw order, now in cells.
+// Paints the visible tiles into the character grid: floors first, then walls,
+// props and entities in painter's order (x + y, tie broken by x) -- the phase 0
+// draw order, now in cells.
+//
+// The engine knows the ORDER and the CULLING; it knows nothing about the art.
+// A game hands over a table of callbacks and nothing here changes when the art
+// changes:
+//
+//   var view = Isoforge.view.createWorldView(renderer, {
+//     margin: 3,                                  // tiles of slack (optional)
+//     floor:  function (r, ctx) {},               // ctx: {tileX, tileY, cx, cy, variant, grid}
+//     block:  function (r, ctx) {},               // solid tile; ctx: same shape
+//     prop:   { torch: function (r, ctx) },       // one entry per prop kind
+//     propAt: function (tileX, tileY, grid) {},   // -> prop kind or null
+//     entity: { player: function (r, ctx) },      // ctx: {entity, index, cx, cy, alpha}
+//     entityFallback: function (r, ctx),          // optional
+//     cursor: function (r, cx, cy, blocked),      // optional, engine default
+//     cursorColor: 0xRRGGBB, cursorBlockedColor: 0xRRGGBB
+//   });
+//
+// `draw(scene, camera, alpha, hoveredTile)` takes a scene of the form
+// { grid: <tile grid>, entities: [{kind, x, y, prevX, prevY, layer?}] }.
 //
 // The per-tile visibility test is the SAME function the audit calls, so the
 // number of tiles drawn and the number of tiles that geometrically touch the
 // viewport have to come out identical.
 
-function createWorldView(renderer) {
+function createWorldView(renderer, art) {
   var pool = [];
   for (var i = 0; i < 8192; i++) {
-    pool.push({ depth: 0, tie: 0, kind: 0, tileX: 0, tileY: 0, cx: 0, cy: 0, variant: 0 });
+    pool.push({ depth: 0, tie: 0, kind: 0, tileX: 0, tileY: 0, cx: 0, cy: 0, variant: 0, prop: null });
   }
   var active = [];
   var stats = {
@@ -19,6 +38,10 @@ function createWorldView(renderer) {
   var KIND_PROP = 1;
   var KIND_WALL = 2;
   var KIND_ENTITY = 3;
+  // Slack for the AABB, in tiles, derived from the geometry: the bleed ring is
+  // measured in cells and the taller a cell is next to a tile, the more tiles the
+  // ring covers.
+  var margin = art.margin === undefined ? requiredTileMargin() : art.margin;
 
   function push(depth, tie, kind, tileX, tileY, cx, cy, variant) {
     if (active.length >= pool.length) return;
@@ -31,15 +54,17 @@ function createWorldView(renderer) {
     slot.cx = cx;
     slot.cy = cy;
     slot.variant = variant;
+    slot.prop = null;
     active.push(slot);
   }
 
-  function draw(sim, camera, alpha, hoveredTile) {
+  function draw(scene, camera, alpha, hoveredTile) {
     var metrics = renderer.metrics();
     var cols = metrics.cols;
     var rows = metrics.rows;
-    var grid = sim.grid;
-    var bounds = visibleTileBounds(camera.x, camera.y, cols, rows, 3);
+    var grid = scene.grid;
+    var entities = scene.entities || [];
+    var bounds = visibleTileBounds(camera.x, camera.y, cols, rows, margin);
     // One lattice for the whole frame: tiles, props, entities and the cursor are
     // all placed against it, so nothing can shimmer relative to anything else.
     var lattice = coarseLatticeCell(camera);
@@ -59,11 +84,12 @@ function createWorldView(renderer) {
         if (!tileTouchesViewport(tx, ty, camera.x, camera.y, cols, rows)) { stats.culled++; continue; }
         var center = tileCenterCellInLattice(tx + 0.5, ty + 0.5, lattice, cols, rows);
         var variant = grid.floorVariant(tx, ty);
-        if (grid.walkable[ty * grid.width + tx]) {
-          drawFloorTile(renderer, tx, ty, variant, center.x, center.y);
+        var ctx = { tileX: tx, tileY: ty, cx: center.x, cy: center.y, variant: variant, grid: grid };
+        if (grid.isWalkableTile(tx, ty)) {
+          if (art.floor) art.floor(renderer, ctx);
           stats.tilesDrawn++;
-          var prop = propKindFor(tx, ty);
-          if (prop) {
+          var prop = art.propAt ? art.propAt(tx, ty, grid) : null;
+          if (prop && art.prop && art.prop[prop]) {
             push(tx + ty + 0.1, tx, KIND_PROP, tx, ty, center.x, center.y, variant);
             active[active.length - 1].prop = prop;
             stats.propsDrawn++;
@@ -75,12 +101,12 @@ function createWorldView(renderer) {
       }
     }
 
-    for (var e = 0; e < sim.entities.length; e++) {
-      var entity = sim.entities[e];
+    for (var e = 0; e < entities.length; e++) {
+      var entity = entities[e];
       var ix = entity.prevX + (entity.x - entity.prevX) * alpha;
       var iy = entity.prevY + (entity.y - entity.prevY) * alpha;
       var cell = tileCenterCellInLattice(ix, iy, lattice, cols, rows);
-      push(ix + iy, ix, KIND_ENTITY, e, 0, cell.x, cell.y, entity.kind === "player" ? 0 : 1);
+      push(ix + iy, ix, KIND_ENTITY, e, 0, cell.x, cell.y, entity.layer || 0);
       stats.spritesDrawn++;
     }
 
@@ -94,37 +120,47 @@ function createWorldView(renderer) {
     for (var k = 0; k < active.length; k++) {
       var item = active[k];
       if (item.kind === KIND_WALL) {
-        drawWallBlock(renderer, item.cx, item.cy, item.tileX, item.tileY);
+        if (art.block) art.block(renderer, item);
       } else if (item.kind === KIND_PROP) {
-        if (item.prop === "pillar") drawPillar(renderer, item.cx, item.cy, item.tileX, item.tileY);
-        else if (item.prop === "torch") drawTorch(renderer, item.cx, item.cy);
-        else if (item.prop === "bones") drawBones(renderer, item.cx, item.cy, item.tileX, item.tileY);
-        else if (item.prop === "water") drawWater(renderer, item.cx, item.cy);
-        else drawRubble(renderer, item.cx, item.cy, item.tileX, item.tileY);
+        art.prop[item.prop](renderer, item);
       } else {
-        var who = sim.entities[item.tileX];
-        if (who.kind === "player") drawHero(renderer, item.cx, item.cy);
-        else drawMonster(renderer, item.cx, item.cy, who.index);
+        var who = entities[item.tileX];
+        var painter = art.entity[who.kind] || art.entityFallback;
+        if (painter) {
+          painter(renderer, { entity: who, index: item.tileX, cx: item.cx, cy: item.cy, alpha: alpha });
+        }
       }
     }
     stats.drawables = active.length;
 
     if (hoveredTile && hoveredTile.inside) {
       var hover = tileCenterCellInLattice(hoveredTile.x + 0.5, hoveredTile.y + 0.5, lattice, cols, rows);
-      drawCursor(renderer, hover.x, hover.y, !hoveredTile.walkable);
+      if (art.cursor) art.cursor(renderer, hover.x, hover.y, !hoveredTile.walkable);
+      else drawDefaultCursor(renderer, hover.x, hover.y, !hoveredTile.walkable, art);
     }
   }
 
   return { draw: draw, stats: stats };
 }
 
-// Decor per tile: deterministic, no state, so the crypt is reproducible.
-function propKindFor(tx, ty) {
-  var n = hashNoise(tx, ty, 11, 13);
-  if (n > 0.985) return "torch";
-  if (n > 0.955) return "pillar";
-  if (n > 0.930) return "bones";
-  if (n > 0.912) return "water";
-  if (n > 0.870) return "rubble";
-  return null;
+// The engine's cursor: a diamond outline that follows the tile geometry, so a
+// game gets a usable hover indicator without writing one. A game that wants its
+// own passes art.cursor and this never runs.
+function drawDefaultCursor(renderer, centerX, centerY, blocked, art) {
+  var cx = Math.round(centerX);
+  var cy = Math.round(centerY);
+  var color = blocked
+    ? (art.cursorBlockedColor === undefined ? rgb(200, 64, 48) : art.cursorBlockedColor)
+    : (art.cursorColor === undefined ? rgb(232, 196, 104) : art.cursorColor);
+  var halfW = TILE_DIAMOND_HALF_W;
+  var halfH = TILE_DIAMOND_HALF_H;
+  var spanX = Math.ceil(halfW);
+  var spanY = Math.ceil(halfH);
+  for (var dy = -spanY; dy <= spanY; dy++) {
+    for (var dx = -spanX; dx <= spanX; dx++) {
+      if (!renderer.inDiamond(dx, dy, halfW, halfH)) continue;
+      if (renderer.inDiamond(dx, dy, halfW - 1, halfH - 0.4)) continue;
+      renderer.plot(cx + dx, cy + dy, glyphIndex(dx < 0 ? "/" : dx > 0 ? "\\" : "_"), color);
+    }
+  }
 }

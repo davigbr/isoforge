@@ -1,123 +1,81 @@
-// HUD drawn in characters, into the same grid as the world: box drawing plus
-// text with a solid background. No DOM overlay at all -- a text panel can never
-// overflow, because it is clamped to the grid it is drawn into.
+// HUD drawn in characters, into its own grid layered over the world: box
+// drawing plus text with a solid background. A text panel can never overflow,
+// because it is clamped to the grid it is drawn into.
 //
-// Every identifier, comment and key in this file is English, like the rest of
-// the source. The one exception is HUD_TEXT below: that is the copy the player
-// reads on screen, which the project keeps in Portuguese (the ship page and all
-// other player-facing text are Portuguese too). Changing the language of the
-// interface is editing this table, nothing else.
+// The engine owns the FRAME algorithm; the game owns the CONTENT. A game hands
+// over a layout and nothing here changes when the panels change:
+//
+//   var hud = Isoforge.hud.createHud(hudRenderer, {
+//     colors: { line: c1, background: c2, title: c3, label: c4, value: c5 },
+//     panels: function (metrics, state) {
+//       return [{ x: 1, y: 1, width: 30, height: 6, title: "arena",
+//                 rows: [{ label: "fps", value: state.fps }] }];
+//     },
+//     hint: function (metrics, state) { return "WASD move"; },
+//     hintColor: c6
+//   });
+//
+// `state` is whatever the game passes to draw(): the HUD never reads the world.
+// Rows are label-on-the-left, value-on-the-right, which is what makes a metrics
+// panel readable at a glance. A panel taller than the grid is clamped, and a row
+// that would fall outside the frame is dropped instead of drawn over the border.
 
-var HUD_TEXT = {
-  title: "isoforge",
-  debugTitle: "detalhes",
-  fps: "fps",
-  frameP50: "quadro p50",
-  frameP95: "quadro p95",
-  drawP95: "desenho p95",
-  cells: "células",
-  resolution: "resolução",
-  tick: "tique",
-  seed: "semente",
-  state: "estado",
-  mouseTile: "sob o mouse",
-  playerTile: "jogador",
-  grid: "grade",
-  font: "fonte",
-  rebuiltRows: "linhas reconstruídas",
-  spans: "spans/quadro",
-  kilobytes: "kb/quadro",
-  bounds: "faixa",
-  drawables: "ordenados",
-  culled: "descartados",
-  tiles: "tiles",
-  world: "mundo",
-  moveMode: "movimento",
-  wallSuffix: " parede",
-  hint: "W A S D andar · clique no chão caminha até o tile · − / + resolução · F tela cheia · H detalhes · R semente · G regerar",
-  moveClick: "clique",
-  moveKeys: "teclado"
-};
+function createHud(renderer, layout) {
+  var colors = layout.colors;
 
-function createHud(renderer) {
-  var debugVisible = false;
-  var frameCounter = 0;
-  var last = null;
+  function repeat(character, count) {
+    var out = "";
+    for (var i = 0; i < count; i++) out += character;
+    return out;
+  }
 
   function pad(text, width) {
     text = String(text);
     if (text.length > width) return text.slice(0, width);
-    return text + "                                        ".slice(0, width - text.length);
+    return text + repeat(" ", width - text.length);
   }
 
-  function panel(x, y, width, height, title) {
+  function panelFrame(box) {
     var metrics = renderer.metrics();
-    var w = Math.max(10, Math.min(width, metrics.cols - x - 1));
-    renderer.text(x, y, "╔" + "═".repeat(w - 2) + "╗", PALETTE.panelLine, PALETTE.panelBg);
+    var width = Math.max(10, Math.min(box.width, metrics.cols - box.x - 1));
+    var height = Math.max(3, Math.min(box.height, metrics.rows - box.y - 2));
+    var background = colors.background;
+    renderer.text(box.x, box.y, "╔" + repeat("═", width - 2) + "╗", colors.line, background);
     for (var j = 1; j < height - 1; j++) {
-      renderer.text(x, y + j, "║" + " ".repeat(w - 2) + "║", PALETTE.panelLine, PALETTE.panelBg);
+      renderer.text(box.x, box.y + j, "║" + repeat(" ", width - 2) + "║", colors.line, background);
     }
-    renderer.text(x, y + height - 1, "╚" + "═".repeat(w - 2) + "╝", PALETTE.panelLine, PALETTE.panelBg);
-    if (title) renderer.text(x + 2, y, " " + title + " ", PALETTE.gold, PALETTE.panelBg);
-    return { x: x, y: y, width: w, inner: w - 4 };
+    renderer.text(box.x, box.y + height - 1, "╚" + repeat("═", width - 2) + "╝", colors.line, background);
+    if (box.title) renderer.text(box.x + 2, box.y, " " + box.title + " ", colors.title, background);
+    return { x: box.x, y: box.y, width: width, height: height, inner: width - 4 };
   }
 
   function row(box, index, label, value) {
-    var valueText = String(value);
+    if (index + 2 > box.height - 1) return;
+    var valueText = String(value === undefined || value === null ? "—" : value);
     var labelWidth = Math.max(1, box.inner - valueText.length - 1);
     var left = pad(label, labelWidth);
-    renderer.text(box.x + 2, box.y + 1 + index, left, PALETTE.bone2, PALETTE.panelBg);
-    renderer.text(box.x + 2 + left.length, box.y + 1 + index, valueText, PALETTE.gold, PALETTE.panelBg);
+    var y = box.y + 1 + index;
+    renderer.text(box.x + 2, y, left, colors.label, colors.background);
+    renderer.text(box.x + 2 + left.length, y, valueText, colors.value, colors.background);
   }
 
-  function draw(data) {
-    frameCounter++;
-    // Numbers refresh every few frames: rewriting them every frame costs more
-    // than it shows.
-    if (frameCounter % 4 === 1 || !last) last = data;
-    var info = last;
+  function draw(state) {
     var metrics = renderer.metrics();
-
-    var box = panel(1, 1, 30, 13, HUD_TEXT.title);
-    row(box, 0, HUD_TEXT.fps, info.fpsText);
-    row(box, 1, HUD_TEXT.frameP50, info.p50Text);
-    row(box, 2, HUD_TEXT.frameP95, info.p95Text);
-    row(box, 3, HUD_TEXT.drawP95, info.drawText);
-    row(box, 4, HUD_TEXT.cells, info.cellsText);
-    row(box, 5, HUD_TEXT.resolution, info.resolutionText);
-    row(box, 6, HUD_TEXT.tick, info.tick);
-    row(box, 7, HUD_TEXT.seed, info.seed);
-    row(box, 8, HUD_TEXT.state, info.stateHash);
-    row(box, 9, HUD_TEXT.mouseTile, info.mouseTile);
-    row(box, 10, HUD_TEXT.playerTile, info.playerTile);
-
-    if (debugVisible) {
-      // Per-frame feedback (spans, bytes, rebuilt rows) lives HERE and not in the
-      // main panel: those values change every frame, so showing them always keeps
-      // the grid from ever being quiet.
-      var debug = panel(Math.max(1, metrics.cols - 29), 1, 28, 13, HUD_TEXT.debugTitle);
-      row(debug, 0, HUD_TEXT.grid, info.gridText);
-      row(debug, 1, HUD_TEXT.font, info.fontText);
-      row(debug, 2, HUD_TEXT.rebuiltRows, info.rebuiltText);
-      row(debug, 3, HUD_TEXT.spans, info.spanText);
-      row(debug, 4, HUD_TEXT.kilobytes, info.kbText);
-      row(debug, 5, HUD_TEXT.bounds, info.boundsText);
-      row(debug, 6, HUD_TEXT.drawables, info.drawables);
-      row(debug, 7, HUD_TEXT.culled, info.culled);
-      row(debug, 8, HUD_TEXT.tiles, info.tilesText);
-      row(debug, 9, HUD_TEXT.world, info.worldText);
-      row(debug, 10, HUD_TEXT.moveMode, info.moveMode);
+    var panels = typeof layout.panels === "function" ? layout.panels(metrics, state) : (layout.panels || []);
+    for (var i = 0; i < panels.length; i++) {
+      var box = panelFrame(panels[i]);
+      var rows = panels[i].rows || [];
+      for (var r = 0; r < rows.length; r++) row(box, r, rows[r].label, rows[r].value);
     }
-
-    var hint = HUD_TEXT.hint;
-    var hintStart = Math.max(1, Math.floor((metrics.cols - hint.length) / 2));
-    renderer.text(hintStart, metrics.rows - 2, pad(hint, metrics.cols - hintStart - 1),
-      PALETTE.bone2, PALETTE.panelBg);
+    var hint = layout.hint;
+    if (typeof hint === "function") hint = hint(metrics, state);
+    if (hint) {
+      hint = String(hint);
+      var start = Math.max(1, Math.floor((metrics.cols - hint.length) / 2));
+      renderer.text(start, metrics.rows - 2, pad(hint, metrics.cols - start - 1),
+        layout.hintColor === undefined ? colors.value : layout.hintColor, colors.background);
+    }
   }
 
-  return {
-    draw: draw,
-    setDebugVisible: function (value) { debugVisible = value; },
-    isDebugVisible: function () { return debugVisible; }
-  };
+  return { draw: draw, layout: layout };
 }

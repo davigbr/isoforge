@@ -14,6 +14,7 @@ function createLoop(handlers) {
   var accumulator = 0;
   var lastTime = 0;
   var running = false;
+  var rafHandle = 0;
   var frameSamples = [];
   var renderSamples = [];
   var sampleLimit = 240;
@@ -55,14 +56,17 @@ function createLoop(handlers) {
     if (frameMs > stats.stutterMs) stats.stutters++;
     stats.frameMs = frameMs;
     stats.renderMs = renderMs;
-    stats.fps = frameMs > 0 ? 1000 / frameMs : 0;
+    // fps from the MEDIAN frame, not from the last one: two rAF callbacks can
+    // land in the same millisecond and an instantaneous 1000/frameMs then reads
+    // 0 fps on a perfectly healthy loop (that is how a green run reported 0).
     stats.p50 = percentile(frameSamples, 0.5);
     stats.p95 = percentile(frameSamples, 0.95);
+    stats.fps = stats.p50 > 0 ? 1000 / stats.p50 : 0;
     stats.renderP95 = percentile(renderSamples, 0.95);
   }
 
   function frame(now) {
-    if (!running) return;
+    if (!running) { rafHandle = 0; return; }
     var delta = lastTime ? now - lastTime : FIXED_STEP_MS;
     lastTime = now;
     // A hidden tab (or a long GC pause) must not trigger a catch-up burst.
@@ -84,19 +88,28 @@ function createLoop(handlers) {
 
     stats.lastSteps = steps;
     stats.steps += steps;
-    requestAnimationFrame(frame);
+    rafHandle = requestAnimationFrame(frame);
   }
 
   return {
     stats: stats,
     resetStats: resetStats,
+    // The rAF handle is tracked and CANCELLED, not merely ignored. Without this,
+    // a stop() followed by a start() before the pending callback fires leaves TWO
+    // chains running: every frame is then processed twice, half the frame deltas
+    // are 0 ms, `fps` (the median) reads 0 on a perfectly healthy loop, and the
+    // frame counter reports double. Measured: 468 frames in a 5 s window.
     start: function () {
       if (running) return;
       running = true;
       lastTime = 0;
-      requestAnimationFrame(frame);
+      if (rafHandle) cancelAnimationFrame(rafHandle);
+      rafHandle = requestAnimationFrame(frame);
     },
-    stop: function () { running = false; },
+    stop: function () {
+      running = false;
+      if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = 0; }
+    },
     isRunning: function () { return running; }
   };
 }

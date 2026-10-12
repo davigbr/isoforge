@@ -10,14 +10,10 @@
 // 11px font measured in the browser -- the same proportion as Diablo 2's 64x32
 // tile, which is why the phase 0 numbers (culling, click picking, camera clamp)
 // carry over unchanged: only the unit changed.
-
-var TILE_CELLS_W = 10;
-var TILE_CELLS_H = 3;
-var HALF_TILE_W = TILE_CELLS_W / 2;
-var HALF_TILE_H = TILE_CELLS_H / 2;
-var TILE_DIAMOND_HALF_W = 4.5;    // drawn footprint, in cells
-var TILE_DIAMOND_HALF_H = 1.5;
-var WALL_HEIGHT_CELLS = 4;
+//
+// The tile size is NOT defined here: core/config.js owns it (and every other
+// engine-wide number), so a game can ask for 20x6 cells and get twice the art
+// detail per tile without touching this file.
 
 function worldToCellX(x, y) { return (x - y) * HALF_TILE_W; }
 function worldToCellY(x, y) { return (x + y) * HALF_TILE_H; }
@@ -34,10 +30,20 @@ function viewHalfExtents(cols, rows) {
   };
 }
 
+// The iterated rectangle must cover the viewport PLUS the bleed ring, and the
+// bleed is measured in CELLS while the rectangle is measured in TILES -- so the
+// margin has to be derived, not hardcoded. A hardcoded 3 tiles was right for the
+// 10x3 tile and wrong for an 8x2 one: a cell is much taller than wide, so the
+// vertical axis needs the most slack, and one tile at the edge of the rectangle
+// was skipped (drawn came out exactly one short of the geometric count).
+function requiredTileMargin() {
+  return Math.ceil(LATTICE_BLEED / Math.min(HALF_TILE_W, HALF_TILE_H)) + 1;
+}
+
 // Tile rectangle whose diamonds cover the viewport.
 function visibleTileBounds(camX, camY, cols, rows, margin) {
   var ext = viewHalfExtents(cols, rows);
-  margin = margin || 0;
+  margin = margin === undefined ? requiredTileMargin() : margin;
   return {
     x0: Math.floor(camX - ext.x) - margin,
     y0: Math.floor(camY - ext.y) - margin,
@@ -46,10 +52,19 @@ function visibleTileBounds(camX, camY, cols, rows, margin) {
   };
 }
 
+// Keep the camera inside the world. `clampAxis` handles the case where the
+// viewport is WIDER than the world (a small arena, or a tile geometry that shows
+// many tiles per screen): the valid range inverts, and pinning the camera to one
+// edge would be wrong -- centring the world on screen is what the player expects.
+function clampAxis(value, low, high) {
+  if (high < low) return (low + high) / 2;
+  return clamp(value, low, high);
+}
+
 function clampCamera(camera, gridW, gridH, cols, rows) {
   var ext = viewHalfExtents(cols, rows);
-  camera.x = clamp(camera.x, ext.x - 0.5, gridW - 0.5 - ext.x);
-  camera.y = clamp(camera.y, ext.y - 0.5, gridH - 0.5 - ext.y);
+  camera.x = clampAxis(camera.x, ext.x - 0.5, gridW - 0.5 - ext.x);
+  camera.y = clampAxis(camera.y, ext.y - 0.5, gridH - 0.5 - ext.y);
 }
 
 // Cell coordinates (fractional) of a world point on screen; the camera sits at
@@ -77,13 +92,15 @@ function snappedCameraCell(camera) {
   };
 }
 
-// LATTICE_QUANTUM cells of camera movement between two content rebuilds. The
-// content is generated for this coarse anchor and the SUB-CELL remainder is
-// applied as a CSS transform, so walking does not rewrite the grid: at 10 cells
-// per tile and 4.2 tiles/s the screen scrolls ~42 cells/s, and rebuilding the
-// whole grid 42 times per second was 5.5 MB/s of HTML (measured).
-var LATTICE_QUANTUM = 8;
-var LATTICE_BLEED = LATTICE_QUANTUM / 2;   // extra cells kept off screen
+// LATTICE_QUANTUM cells of camera movement between two content rebuilds, and
+// LATTICE_BLEED = quantum / 2 extra cells kept off screen so the slide never
+// reveals a gap. Both come from core/config.js.
+//
+// Why the content is not generated per frame: at 10 cells per tile and 4.2
+// tiles/s the screen scrolls ~42 cells/s, and rebuilding the whole grid 42 times
+// per second was 5.5 MB/s of HTML (measured) -- the scenery appeared to be
+// regenerating while the player walked. The sub-cell remainder is applied as a
+// CSS transform instead, so a rebuild only happens once per quantum.
 
 function coarseLatticeCell(camera) {
   var snapped = snappedCameraCell(camera);

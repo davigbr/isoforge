@@ -1,0 +1,78 @@
+/* Isoforge engine stylesheet: everything the engine itself needs to be a
+   terminal. A game MUST NOT redefine these rules -- it inlines this file first
+   and only appends its own extras (a loading state, a font choice), because the
+   grid geometry the JS measures depends on them: fixed positioning, no margin,
+   no letter spacing, no kerning, one block per row. */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #06060a;
+  color: #d8cbb0;
+  font-family: "SFMono-Regular", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+/* World layer. The grid is deliberately LARGER than the viewport (the bleed
+   ring) and slides by a whole-device-pixel transform, so walking never
+   rewrites the grid: rebuilds happen once per lattice quantum, not once per
+   cell of camera travel. */
+#screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: block;
+  background: #06060a;
+  white-space: pre;
+  font-family: inherit;
+  font-variant-ligatures: none;
+  font-kerning: none;
+  letter-spacing: 0;
+  cursor: crosshair;
+  user-select: none;
+  outline: none;
+  touch-action: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+#screen i { font-style: normal; }
+
+/* HUD layer: same font, same cell size, same grid -- so panels line up with the
+   world's character cells -- but never transformed, so it stays still while the
+   world scrolls. Transparent except where a panel paints its own background, and
+   pointer-events:none so every mouse event still reaches the world grid. */
+#hud {
+  position: fixed;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: block;
+  background: transparent;
+  white-space: pre;
+  font-family: inherit;
+  font-variant-ligatures: none;
+  font-kerning: none;
+  letter-spacing: 0;
+  user-select: none;
+  pointer-events: none;
+  z-index: 2;
+  transform-origin: 0 0;
+}
+#hud i { font-style: normal; }
+
+/* One block per row: the renderer only rewrites the rows that changed. */
+#screen .r,
+#hud .r {
+  display: block;
+  min-height: 1em;
+  white-space: pre;
+}

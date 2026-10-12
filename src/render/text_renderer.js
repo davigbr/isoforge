@@ -77,7 +77,27 @@ function hexColor(color) {
   return "#" + ("00000" + color.toString(16)).slice(-6);
 }
 
-// Deterministic 0..1 noise, no state: same seed -> same crypt, always.
+function pickStep(noise, steps) {
+  var index = (noise * steps) | 0;
+  return index >= steps ? steps - 1 : index;
+}
+
+// A character only covers part of its cell, so the brightness you perceive is
+// well below the ink colour: a dark stone palette renders as an almost black
+// screen (measured: p90 luminance 30, 0.4% of pixels above 100). Every text-mode
+// palette wants this boost; the numbers are the game's choice.
+function boostColor(color, saturation, gain, lift) {
+  var channels = [(color >> 16) & 255, (color >> 8) & 255, color & 255];
+  var mean = (channels[0] + channels[1] + channels[2]) / 3;
+  var out = [0, 0, 0];
+  for (var i = 0; i < 3; i++) {
+    var v = (mean + (channels[i] - mean) * saturation) * gain + lift;
+    out[i] = v < 0 ? 0 : v > 255 ? 255 : v;
+  }
+  return rgb(out[0], out[1], out[2]);
+}
+
+// Deterministic 0..1 noise, no state: same seed -> same world, always.
 function hashNoise(a, b, c, d) {
   var h = (a * 374761393 + b * 668265263 + c * 2246822519 + d * 3266489917) | 0;
   h = (h ^ (h >>> 13)) * 1274126177;
@@ -85,16 +105,9 @@ function hashNoise(a, b, c, d) {
   return (h >>> 0) / 4294967296;
 }
 
-// Grid density: how many character rows a full screen holds. It is a runtime
-// knob (keys - and +, stored in localStorage, overridable by #rows=NN in the
-// URL) because the trade is visible: more rows = smaller font = more world on
-// screen, and more cells to keep in the DOM.
-var DEFAULT_TARGET_ROWS = 69;   // the ship's HUGE grid
-var MIN_TARGET_ROWS = 40;
-var MAX_TARGET_ROWS = 170;
-var MIN_FONT_PX = 5.5;          // below this a glyph stops being legible
-var MAX_FONT_PX = 22;
-
+// Grid density (rows that fill the viewport) is a runtime knob driven by the
+// game: keys, a URL hash, a stored preference. The engine only owns the limits
+// and the reasoning behind them, in core/config.js.
 function createTextRenderer(preElement, options) {
   var pre = preElement;
   // The world needs a bleed ring so it can slide sub-cell without revealing a
