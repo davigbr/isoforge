@@ -95,11 +95,17 @@ function drawFloorTile(renderer, tileX, tileY, variant, centerX, centerY) {
 // --- walls -------------------------------------------------------------------
 // Glyph variety is free; only colour breaks runs. So the faces pick a glyph per
 // cell for texture but a shade from a four step ramp.
-function quadPaint(color, seedA, seedB, steps, glyphs) {
+//
+// The hash input is the TILE plus an offset LOCAL to the shape -- never the
+// cell's position on screen. With screen cells the texture was re-rolled every
+// time the coarse lattice stepped, so the stone boiled while you walked.
+function quadPaint(color, seedA, seedB, steps, glyphs, anchorX, anchorY) {
   return function (x, y) {
-    var glyphNoise = hashNoise(seedA + x, seedB + y, 3, 7);
+    var lx = x - anchorX;
+    var ly = y - anchorY;
+    var glyphNoise = hashNoise(seedA + lx, seedB + ly, 3, 7);
     // shade from a COARSE grid (2x2 cell blocks), so runs stay long
-    var shadeNoise = hashNoise(seedA + ((x / 2) | 0), seedB + ((y / 2) | 0), 23, 41);
+    var shadeNoise = hashNoise(seedA + ((lx / 2) | 0), seedB + ((ly / 2) | 0), 23, 41);
     var index = pickStep(glyphNoise, glyphs.length);
     return {
       glyph: glyphIndex(glyphs[index]),
@@ -108,20 +114,22 @@ function quadPaint(color, seedA, seedB, steps, glyphs) {
   };
 }
 
-function drawWallBlock(renderer, centerX, centerY, variant) {
+function drawWallBlock(renderer, centerX, centerY, tileX, tileY) {
   var cx = Math.round(centerX);
   var cy = Math.round(centerY);
   var halfW = TILE_DIAMOND_HALF_W;
   var halfH = TILE_DIAMOND_HALF_H;
   var h = WALL_HEIGHT_CELLS;
+  var seedA = tileX * 131 + 7;
+  var seedB = tileY * 197 + 11;
 
   // side faces first, so the top diamond overwrites its own seams
   renderer.fillPolygon([
     [cx - halfW, cy - halfH], [cx, cy], [cx, cy - h], [cx - halfW, cy - halfH - h]
-  ], quadPaint(PALETTE.wallLeft, cx * 3, cy * 5, 4, ["▒", "▒", "░", "▓"]));
+  ], quadPaint(PALETTE.wallLeft, seedA, seedB, 4, ["▒", "▒", "░", "▓"], cx, cy));
   renderer.fillPolygon([
     [cx, cy], [cx + halfW, cy - halfH], [cx + halfW, cy - halfH - h], [cx, cy - h]
-  ], quadPaint(PALETTE.wallRight, cx * 7, cy * 11, 3, ["▓", "▓", "▒", "▓"]));
+  ], quadPaint(PALETTE.wallRight, seedA + 3, seedB + 5, 3, ["▓", "▓", "▒", "▓"], cx, cy));
 
   // the vertical mortar seam between the two faces
   renderer.strokeLine(cx, cy - 1, cx, cy - h, glyphIndex("│"), PALETTE.mortar);
@@ -130,24 +138,26 @@ function drawWallBlock(renderer, centerX, centerY, variant) {
   for (var dy = -2; dy <= 2; dy++) {
     for (var dx = -5; dx <= 5; dx++) {
       if (!renderer.inDiamond(dx, dy, halfW, halfH)) continue;
-      var noise = hashNoise(cx + dx, cy + dy, 5, 9);
-      var shadeNoise = hashNoise(cx + ((dx / 2) | 0), cy + ((dy / 2) | 0), 29, 13);
+      var noise = hashNoise(seedA + dx, seedB + dy, 5, 9);
+      var shadeNoise = hashNoise(seedA + ((dx / 2) | 0), seedB + ((dy / 2) | 0), 29, 13);
       var glyph = rampIndexAt(0.26 + noise * 0.34);
       renderer.plot(cx + dx, cy - h + dy, glyph, shade(PALETTE.wallTop, 0.86 + pickStep(shadeNoise, 4) * 0.09));
     }
   }
 }
 
-function drawPillar(renderer, centerX, centerY) {
+function drawPillar(renderer, centerX, centerY, tileX, tileY) {
   var cx = Math.round(centerX);
   var cy = Math.round(centerY);
   var h = WALL_HEIGHT_CELLS + 1;
+  var seedA = tileX * 211 + 13;
+  var seedB = tileY * 223 + 17;
   renderer.fillPolygon([
     [cx - 2, cy], [cx, cy - 1], [cx, cy - 1 - h], [cx - 2, cy - h]
-  ], quadPaint(PALETTE.wallLeft, cx * 13, cy * 17, 3, ["▒", "░", "▒"]));
+  ], quadPaint(PALETTE.wallLeft, seedA, seedB, 3, ["▒", "░", "▒"], cx, cy));
   renderer.fillPolygon([
     [cx, cy - 1], [cx + 2, cy], [cx + 2, cy - h], [cx, cy - 1 - h]
-  ], quadPaint(PALETTE.wallRight, cx * 19, cy * 23, 3, ["▓", "▒", "▓"]));
+  ], quadPaint(PALETTE.wallRight, seedA + 7, seedB + 9, 3, ["▓", "▒", "▓"], cx, cy));
   renderer.text(cx - 1, cy - 1 - h, "_", PALETTE.wallTop);
   renderer.text(cx, cy - 1 - h, "_", PALETTE.wallTop);
   renderer.text(cx + 1, cy - 1 - h, "_", PALETTE.wallTop);

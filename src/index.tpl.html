@@ -8,9 +8,12 @@
 <!--__STYLE__-->
 </head>
 <body>
-<!-- The entire game is this one element: a character grid. World, entities and
-     HUD are all drawn into the same cells. -->
+<!-- The world is one character grid. It slides by a sub-cell CSS transform while
+     walking, so the HUD cannot live in the same grid: it would slide with it and
+     shake. The HUD is a second grid, stacked on top, never transformed, only
+     rewritten when one of its numbers changes. -->
 <pre id="screen" tabindex="0" spellcheck="false"></pre>
+<pre id="hud" aria-hidden="true" spellcheck="false"></pre>
 <script>
 /*__MODULES__*/
 </script>

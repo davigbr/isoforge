@@ -298,7 +298,7 @@ function createHeadless() {
   // iterated rectangle (no holes). The renderer then rejects the rest with the
   // very same test, so the audit can compare the two counts for equality.
   function culling(cols, rows, camX, camY) {
-    var margin = 2;
+    var margin = 3;
     var bounds = visibleTileBounds(camX, camY, cols, rows, margin);
     var inside = {};
     var iteratedInWorld = 0;

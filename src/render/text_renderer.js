@@ -8,6 +8,13 @@
 //   real crypt art (185 colours) .. 2.54 ms and 135 KB of HTML per frame
 // The DOM path is 4x faster at the median and 12x faster at p95, so the engine
 // renders text. Everything the player sees is a character with a colour.
+//
+// SCROLLING: the grid is deliberately larger than the viewport (LATTICE_BLEED
+// cells on each side) and the content is generated for a COARSE lattice anchor;
+// the sub-cell remainder is applied as a CSS transform, snapped to whole CSS
+// pixels so glyphs stay crisp. Walking therefore moves the picture at 60 fps
+// without rewriting the grid: rebuilding it 42 times a second cost 5.5 MB/s of
+// HTML and made static scenery look like it was being regenerated.
 
 var CELL_ASPECT = 1.67;      // character cell height / width (from ship.py)
 
@@ -78,28 +85,43 @@ function hashNoise(a, b, c, d) {
   return (h >>> 0) / 4294967296;
 }
 
-var TARGET_ROWS = 69;         // vertical cells on a full screen: the ship's HUGE
-var MIN_FONT_PX = 7.5;
+// Grid density: how many character rows a full screen holds. It is a runtime
+// knob (keys - and +, stored in localStorage, overridable by #rows=NN in the
+// URL) because the trade is visible: more rows = smaller font = more world on
+// screen, and more cells to keep in the DOM.
+var DEFAULT_TARGET_ROWS = 69;   // the ship's HUGE grid
+var MIN_TARGET_ROWS = 40;
+var MAX_TARGET_ROWS = 170;
+var MIN_FONT_PX = 5.5;          // below this a glyph stops being legible
 var MAX_FONT_PX = 22;
 
-function createTextRenderer(preElement) {
+function createTextRenderer(preElement, options) {
   var pre = preElement;
-  var cols = 0;
+  // The world needs a bleed ring so it can slide sub-cell without revealing a
+  // gap. A static overlay (the HUD) needs the opposite: bleed 0 means its grid
+  // starts at the viewport origin, so it needs no transform at all -- and an
+  // untransformed layer is not composited, so a HUD update repaints only the
+  // rows that changed instead of re-rastering the whole screen.
+  var bleed = (options && typeof options.bleed === "number") ? options.bleed : LATTICE_BLEED;
+  var cols = 0;                 // VISIBLE cells (what the HUD lays out against)
   var rows = 0;
+  var bufferCols = 0;           // drawn cells: visible plus the bleed ring
+  var bufferRows = 0;
   var chars = null;
   var fg = null;
   var bg = null;
   var cellW = 0;
   var cellH = 0;
   var fontPx = 0;
+  var targetRows = DEFAULT_TARGET_ROWS;
   var advanceRatio = 0.6;     // advance width / font size, measured at boot
   var rowHashes = null;       // one hash per row: unchanged rows are left alone
   var rowCache = null;
   var rowElements = null;     // one <span class="r"> per row inside the <pre>
-  var pen = { x: 0, y: 0 };
   var stats = {
-    cols: 0, rows: 0, cells: 0, fontPx: 0, cellW: 0, cellH: 0,
-    drawnCells: 0, spans: 0, htmlBytes: 0, presentMs: 0, scaled: 1
+    cols: 0, rows: 0, bufferCols: 0, bufferRows: 0, cells: 0, fontPx: 0,
+    cellW: 0, cellH: 0, targetRows: 0, drawnCells: 0, spans: 0, htmlBytes: 0,
+    gridBytes: 0, rebuiltRows: 0, presentMs: 0, translatePx: [0, 0]
   };
 
   // Measure the font once so the grid is derived from real metrics, never from
@@ -119,27 +141,30 @@ function createTextRenderer(preElement) {
     if (!(advanceRatio > 0.3 && advanceRatio < 1.2)) advanceRatio = 0.6;
   }
 
-  function resize(viewportWidth, viewportHeight) {
-    fontPx = Math.max(MIN_FONT_PX, Math.min(MAX_FONT_PX, viewportHeight / TARGET_ROWS));
+  function resize(viewportWidth, viewportHeight, requestedRows) {
+    targetRows = requestedRows || targetRows || DEFAULT_TARGET_ROWS;
+    fontPx = Math.max(MIN_FONT_PX, Math.min(MAX_FONT_PX, viewportHeight / targetRows));
     cellW = fontPx * advanceRatio;
     cellH = fontPx;
     cols = Math.max(40, Math.floor(viewportWidth / cellW));
     rows = Math.max(20, Math.floor(viewportHeight / cellH));
+    bufferCols = cols + 2 * bleed;
+    bufferRows = rows + 2 * bleed;
     pre.style.fontSize = fontPx.toFixed(2) + "px";
     pre.style.lineHeight = "1";
-    chars = new Uint8Array(cols * rows);
-    fg = new Int32Array(cols * rows);
-    bg = new Int32Array(cols * rows);
+    chars = new Uint8Array(bufferCols * bufferRows);
+    fg = new Int32Array(bufferCols * bufferRows);
+    bg = new Int32Array(bufferCols * bufferRows);
     // Uint32Array, not Int32Array: the FNV-1a result is unsigned, and an
     // int32-backed store silently never matches the computed value for hashes
     // >= 2^31 (that broke the dirty check on ~55% of the rows).
-    rowHashes = new Uint32Array(rows);
+    rowHashes = new Uint32Array(bufferRows);
     rowHashes.fill(4294967295);
-    rowCache = new Array(rows);
+    rowCache = new Array(bufferRows);
     // One block element per row: the unit of DOM update.
     pre.textContent = "";
-    rowElements = new Array(rows);
-    for (var r = 0; r < rows; r++) {
+    rowElements = new Array(bufferRows);
+    for (var r = 0; r < bufferRows; r++) {
       var rowElement = document.createElement("span");
       rowElement.className = "r";
       pre.appendChild(rowElement);
@@ -147,6 +172,9 @@ function createTextRenderer(preElement) {
     }
     stats.cols = cols;
     stats.rows = rows;
+    stats.bufferCols = bufferCols;
+    stats.bufferRows = bufferRows;
+    stats.targetRows = targetRows;
     stats.cells = cols * rows;
     stats.fontPx = fontPx;
     stats.cellW = cellW;
@@ -161,9 +189,13 @@ function createTextRenderer(preElement) {
     stats.drawnCells = 0;
   }
 
+  // Public coordinates are VISIBLE coordinates: (0,0) is the top-left cell of the
+  // viewport. The bleed ring is addressable as -LATTICE_BLEED .. cols+BLEED.
   function plot(x, y, glyph, color, background) {
-    if (x < 0 || y < 0 || x >= cols || y >= rows) return;
-    var i = y * cols + x;
+    var bx = x + bleed;
+    var by = y + bleed;
+    if (bx < 0 || by < 0 || bx >= bufferCols || by >= bufferRows) return;
+    var i = by * bufferCols + bx;
     chars[i] = glyph;
     fg[i] = color;
     if (background !== undefined && background !== null) bg[i] = background;
@@ -179,12 +211,16 @@ function createTextRenderer(preElement) {
   // Read-side accessors: the art needs them (a light wash only touches cells
   // that are still empty; the audit reads back what was drawn).
   function glyphAt(x, y) {
-    if (x < 0 || y < 0 || x >= cols || y >= rows) return -3;
-    return chars[y * cols + x];
+    var bx = x + bleed;
+    var by = y + bleed;
+    if (bx < 0 || by < 0 || bx >= bufferCols || by >= bufferRows) return -3;
+    return chars[by * bufferCols + bx];
   }
   function colorAt(x, y) {
-    if (x < 0 || y < 0 || x >= cols || y >= rows) return -3;
-    return fg[y * cols + x];
+    var bx = x + bleed;
+    var by = y + bleed;
+    if (bx < 0 || by < 0 || bx >= bufferCols || by >= bufferRows) return -3;
+    return fg[by * bufferCols + bx];
   }
 
   function textAt(x, y, string, color, background) {
@@ -203,8 +239,8 @@ function createTextRenderer(preElement) {
       if (points[i][1] < minY) minY = points[i][1];
       if (points[i][1] > maxY) maxY = points[i][1];
     }
-    var y0 = Math.max(0, Math.floor(minY));
-    var y1 = Math.min(rows - 1, Math.ceil(maxY));
+    var y0 = Math.max(-bleed, Math.floor(minY));
+    var y1 = Math.min(rows + bleed - 1, Math.ceil(maxY));
     for (var y = y0; y <= y1; y++) {
       var yc = y + 0.5;
       var hits = [];
@@ -220,7 +256,7 @@ function createTextRenderer(preElement) {
       for (i = 0; i + 1 < hits.length; i += 2) {
         var xa = Math.round(hits[i] - 0.5);
         var xb = Math.round(hits[i + 1] - 0.5);
-        for (var x = Math.max(0, xa); x <= Math.min(cols - 1, xb); x++) {
+        for (var x = Math.max(-bleed, xa); x <= Math.min(cols + bleed - 1, xb); x++) {
           var cell = paint(x, y, true);
           if (cell) plot(x, y, cell.glyph, cell.color, cell.background);
         }
@@ -251,6 +287,37 @@ function createTextRenderer(preElement) {
     return Math.abs(dx) / halfW + Math.abs(dy) / halfH <= 1.02;
   }
 
+  // Sub-cell placement. The content was generated for the coarse lattice; the
+  // remainder between the lattice and the real camera becomes a translate, so the
+  // picture moves smoothly without the grid being rewritten. Snapped to a DEVICE
+  // pixel (not a CSS pixel) so glyphs stay crisp and the steps are as fine as the
+  // display allows.
+  function setOrigin(lattice, camera) {
+    if (bleed === 0) return;   // static overlay: never transformed, never composited
+    var ratio = window.devicePixelRatio || 1;
+    var originX = lattice.x - worldToCellX(camera.x, camera.y) - bleed;
+    var originY = lattice.y - worldToCellY(camera.x, camera.y) - bleed;
+    var px = Math.round(originX * cellW * ratio) / ratio;
+    var py = Math.round(originY * cellH * ratio) / ratio;
+    if (px !== stats.translatePx[0] || py !== stats.translatePx[1]) {
+      pre.style.transform = "translate(" + px + "px," + py + "px)";
+      stats.translatePx = [px, py];
+    }
+  }
+
+  // A renderer used as a static overlay (the HUD): cancel the bleed so visible
+  // cell (0,0) sits exactly at the viewport origin and nothing slides.
+  function lockToViewport() {
+    if (bleed === 0) return;
+    var ratio = window.devicePixelRatio || 1;
+    var px = Math.round(-bleed * cellW * ratio) / ratio;
+    var py = Math.round(-bleed * cellH * ratio) / ratio;
+    if (px !== stats.translatePx[0] || py !== stats.translatePx[1]) {
+      pre.style.transform = "translate(" + px + "px," + py + "px)";
+      stats.translatePx = [px, py];
+    }
+  }
+
   // Row level dirty check, at the DOM level: each row is its own block element,
   // so a frame only touches the rows whose cells changed. Assigning one big
   // innerHTML for the whole grid costs the browser a full parse + layout of the
@@ -262,10 +329,10 @@ function createTextRenderer(preElement) {
     var bytesWritten = 0;
     var gridBytes = 0;
     var rebuiltRows = 0;
-    for (var y = 0; y < rows; y++) {
-      var base = y * cols;
+    for (var y = 0; y < bufferRows; y++) {
+      var base = y * bufferCols;
       var hash = 0x811c9dc5;
-      for (var h = 0; h < cols; h++) {
+      for (var h = 0; h < bufferCols; h++) {
         hash = hash32Mix(hash, chars[base + h]);
         hash = hash32Mix(hash, fg[base + h]);
         hash = hash32Mix(hash, bg[base + h]);
@@ -280,10 +347,10 @@ function createTextRenderer(preElement) {
       var runStart = 0;
       var runFg = -2;
       var runBg = -2;
-      for (var x = 0; x <= cols; x++) {
+      for (var x = 0; x <= bufferCols; x++) {
         var i = base + x;
-        var f = x < cols ? fg[i] : -3;
-        var b = x < cols ? bg[i] : -3;
+        var f = x < bufferCols ? fg[i] : -3;
+        var b = x < bufferCols ? bg[i] : -3;
         if (f !== runFg || b !== runBg) {
           if (x > runStart) {
             var text = "";
@@ -318,7 +385,7 @@ function createTextRenderer(preElement) {
     stats.rebuiltRows = rebuiltRows;
     stats.presentMs = performance.now() - started;
     return {
-      spans: spans, htmlBytes: bytesWritten, gridBytes: gridBytes,
+      spans: spans, htmlBytes: bytesWritten, gridBytes: gridBytes, rows: bufferRows,
       presentMs: stats.presentMs, rebuiltRows: rebuiltRows
     };
   }
@@ -327,16 +394,19 @@ function createTextRenderer(preElement) {
     resize: resize,
     beginFrame: beginFrame,
     present: present,
+    setOrigin: setOrigin,
+    lockToViewport: lockToViewport,
     plot: plot,
     fillRect: fillRect,
     text: textAt,
     glyphAt: glyphAt,
     colorAt: colorAt,
+    // The visible window only, so callers (and the audit) see what the player sees.
     gridText: function () {
       var out = [];
       for (var y = 0; y < rows; y++) {
         var line = "";
-        for (var x = 0; x < cols; x++) line += GLYPHS[chars[y * cols + x]];
+        for (var x = 0; x < cols; x++) line += GLYPHS[chars[(y + bleed) * bufferCols + (x + bleed)]];
         out.push(line);
       }
       return out.join("\n");
@@ -346,7 +416,12 @@ function createTextRenderer(preElement) {
     inDiamond: inDiamond,
     stats: stats,
     metrics: function () {
-      return { cols: cols, rows: rows, cellW: cellW, cellH: cellH, fontPx: fontPx, advanceRatio: advanceRatio };
+      return {
+        cols: cols, rows: rows, cellW: cellW, cellH: cellH,
+        fontPx: fontPx, advanceRatio: advanceRatio, targetRows: targetRows,
+        bufferCols: bufferCols, bufferRows: bufferRows,
+        latticeQuantum: LATTICE_QUANTUM, latticeBleed: LATTICE_BLEED
+      };
     },
     element: pre
   };

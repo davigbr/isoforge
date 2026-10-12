@@ -61,27 +61,81 @@ function anchorCellY(worldX, worldY, camera, rows) {
   return worldToCellY(worldX, worldY) - worldToCellY(camera.x, camera.y) + rows / 2;
 }
 
-// Centre of a tile's diamond in cell indices: half a cell shift so the diamond's
-// centre lands on a cell centre rather than on a cell boundary.
-function tileCenterCell(worldX, worldY, camera, cols, rows) {
+// The character lattice is quantised ONCE per frame, from the camera, and every
+// tile, prop, entity and cursor is placed against that single lattice.
+//
+// Why: rounding each tile's own centre made the lattice non-rigid. Vertically the
+// tile pitch is 1.5 cells, so the fractional parts of tile centres are 0 and 0.5
+// -- two groups that cross the rounding threshold at different sub-cell phases.
+// Walking made half the rows snap while the other half had not, which reads as
+// vertical shimmer. With the camera snapped first, the whole screen shifts by
+// exactly one cell at a time.
+function snappedCameraCell(camera) {
   return {
-    x: anchorCellX(worldX, worldY, camera, cols) - 0.5,
-    y: anchorCellY(worldX, worldY, camera, rows) - 0.5
+    x: Math.round(worldToCellX(camera.x, camera.y)),
+    y: Math.round(worldToCellY(camera.x, camera.y))
   };
 }
 
-// Screen cell -> world coordinates (exact inverse of the two above).
-function cellToWorld(cellX, cellY, camera, cols, rows) {
-  var cx = cellX - cols / 2 + worldToCellX(camera.x, camera.y);
-  var cy = cellY - rows / 2 + worldToCellY(camera.x, camera.y);
+// LATTICE_QUANTUM cells of camera movement between two content rebuilds. The
+// content is generated for this coarse anchor and the SUB-CELL remainder is
+// applied as a CSS transform, so walking does not rewrite the grid: at 10 cells
+// per tile and 4.2 tiles/s the screen scrolls ~42 cells/s, and rebuilding the
+// whole grid 42 times per second was 5.5 MB/s of HTML (measured).
+var LATTICE_QUANTUM = 8;
+var LATTICE_BLEED = LATTICE_QUANTUM / 2;   // extra cells kept off screen
+
+function coarseLatticeCell(camera) {
+  var snapped = snappedCameraCell(camera);
+  return {
+    x: Math.round(snapped.x / LATTICE_QUANTUM) * LATTICE_QUANTUM,
+    y: Math.round(snapped.y / LATTICE_QUANTUM) * LATTICE_QUANTUM
+  };
+}
+
+function tileCenterCellInLattice(worldX, worldY, lattice, cols, rows) {
+  return {
+    x: worldToCellX(worldX, worldY) - lattice.x + cols / 2 - 0.5,
+    y: worldToCellY(worldX, worldY) - lattice.y + rows / 2 - 0.5
+  };
+}
+
+// Centre of a tile's diamond in cell indices, on the frame lattice.
+function tileCenterCell(worldX, worldY, camera, cols, rows) {
+  return tileCenterCellInLattice(worldX, worldY, coarseLatticeCell(camera), cols, rows);
+}
+
+// Screen cell -> world coordinates (exact inverse of the placement above). The
+// caller passes the cell index inside the BUFFER, hence the bleed subtraction.
+function latticeToWorld(cellX, cellY, lattice, cols, rows) {
+  var cx = cellX + 0.5 - cols / 2 + lattice.x;
+  var cy = cellY + 0.5 - rows / 2 + lattice.y;
   return { x: cellToWorldX(cx, cy), y: cellToWorldY(cx, cy) };
 }
 
-// Does the tile's diamond touch the viewport? Used by the culling audit; the
-// renderer applies the same test per tile while walking the bounds rectangle.
+function cellToWorld(cellX, cellY, camera, cols, rows) {
+  return latticeToWorld(cellX, cellY, coarseLatticeCell(camera), cols, rows);
+}
+
+// Screen point -> world, from the index of the BUFFER cell under the cursor. The
+// caller gets the index from the element's own rect, so the CSS transform (and
+// therefore the coarse lattice and the bleed) cancels out.
+function bufferCellToWorld(bufferCellX, bufferCellY, camera, cols, rows) {
+  return latticeToWorld(
+    bufferCellX - LATTICE_BLEED,
+    bufferCellY - LATTICE_BLEED,
+    coarseLatticeCell(camera), cols, rows
+  );
+}
+
+// Does the tile's diamond touch the drawn area? Computed on the same lattice and
+// with the same bleed the renderer uses, so nothing visible can be skipped.
 function tileTouchesViewport(tileX, tileY, camX, camY, cols, rows) {
-  var cx = worldToCellX(tileX + 0.5 - camX, tileY + 0.5 - camY);
-  var cy = worldToCellY(tileX + 0.5 - camX, tileY + 0.5 - camY);
-  return cx + TILE_DIAMOND_HALF_W > -cols / 2 && cx - TILE_DIAMOND_HALF_W < cols / 2
-    && cy + TILE_DIAMOND_HALF_H > -rows / 2 && cy - TILE_DIAMOND_HALF_H < rows / 2;
+  var lattice = coarseLatticeCell({ x: camX, y: camY });
+  var cx = worldToCellX(tileX + 0.5, tileY + 0.5) - lattice.x;
+  var cy = worldToCellY(tileX + 0.5, tileY + 0.5) - lattice.y;
+  var halfCols = cols / 2 + LATTICE_BLEED;
+  var halfRows = rows / 2 + LATTICE_BLEED;
+  return cx + TILE_DIAMOND_HALF_W > -halfCols && cx - TILE_DIAMOND_HALF_W < halfCols
+    && cy + TILE_DIAMOND_HALF_H > -halfRows && cy - TILE_DIAMOND_HALF_H < halfRows;
 }

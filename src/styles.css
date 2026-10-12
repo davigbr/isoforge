@@ -33,12 +33,42 @@ html, body {
   user-select: none;
   outline: none;
   touch-action: none;
+  /* The grid is larger than the viewport and slides by a whole-pixel
+     transform: origin at the top-left, and no layout work per frame. */
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 #screen i { font-style: normal; }
 
+/* HUD layer: same font, same cell size, same grid -- so the panels line up with
+   the world's character cells -- but never transformed, so it stays still while
+   the world scrolls. Transparent except where a panel paints its own background.
+   pointer-events:none so every mouse event still reaches the world grid. */
+#hud {
+  position: fixed;
+  top: 0;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: block;
+  background: transparent;
+  white-space: pre;
+  font-family: inherit;
+  font-variant-ligatures: none;
+  font-kerning: none;
+  letter-spacing: 0;
+  user-select: none;
+  pointer-events: none;
+  z-index: 2;
+  transform-origin: 0 0;
+}
+#hud i { font-style: normal; }
+
 /* One block per row: the renderer only rewrites the rows that changed. */
-#screen .r {
+#screen .r,
+#hud .r {
   display: block;
   min-height: 1em;
   white-space: pre;

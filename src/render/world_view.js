@@ -39,7 +39,10 @@ function createWorldView(renderer) {
     var cols = metrics.cols;
     var rows = metrics.rows;
     var grid = sim.grid;
-    var bounds = visibleTileBounds(camera.x, camera.y, cols, rows, 2);
+    var bounds = visibleTileBounds(camera.x, camera.y, cols, rows, 3);
+    // One lattice for the whole frame: tiles, props, entities and the cursor are
+    // all placed against it, so nothing can shimmer relative to anything else.
+    var lattice = coarseLatticeCell(camera);
     stats.bounds = bounds;
     stats.iterated = 0;
     stats.culled = 0;
@@ -54,7 +57,7 @@ function createWorldView(renderer) {
         stats.iterated++;
         if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) { stats.culled++; continue; }
         if (!tileTouchesViewport(tx, ty, camera.x, camera.y, cols, rows)) { stats.culled++; continue; }
-        var center = tileCenterCell(tx + 0.5, ty + 0.5, camera, cols, rows);
+        var center = tileCenterCellInLattice(tx + 0.5, ty + 0.5, lattice, cols, rows);
         var variant = grid.floorVariant(tx, ty);
         if (grid.walkable[ty * grid.width + tx]) {
           drawFloorTile(renderer, tx, ty, variant, center.x, center.y);
@@ -76,7 +79,7 @@ function createWorldView(renderer) {
       var entity = sim.entities[e];
       var ix = entity.prevX + (entity.x - entity.prevX) * alpha;
       var iy = entity.prevY + (entity.y - entity.prevY) * alpha;
-      var cell = tileCenterCell(ix, iy, camera, cols, rows);
+      var cell = tileCenterCellInLattice(ix, iy, lattice, cols, rows);
       push(ix + iy, ix, KIND_ENTITY, e, 0, cell.x, cell.y, entity.kind === "player" ? 0 : 1);
       stats.spritesDrawn++;
     }
@@ -91,9 +94,9 @@ function createWorldView(renderer) {
     for (var k = 0; k < active.length; k++) {
       var item = active[k];
       if (item.kind === KIND_WALL) {
-        drawWallBlock(renderer, item.cx, item.cy, item.variant);
+        drawWallBlock(renderer, item.cx, item.cy, item.tileX, item.tileY);
       } else if (item.kind === KIND_PROP) {
-        if (item.prop === "pillar") drawPillar(renderer, item.cx, item.cy);
+        if (item.prop === "pillar") drawPillar(renderer, item.cx, item.cy, item.tileX, item.tileY);
         else if (item.prop === "torch") drawTorch(renderer, item.cx, item.cy);
         else if (item.prop === "bones") drawBones(renderer, item.cx, item.cy, item.tileX, item.tileY);
         else if (item.prop === "water") drawWater(renderer, item.cx, item.cy);
@@ -107,7 +110,7 @@ function createWorldView(renderer) {
     stats.drawables = active.length;
 
     if (hoveredTile && hoveredTile.inside) {
-      var hover = tileCenterCell(hoveredTile.x + 0.5, hoveredTile.y + 0.5, camera, cols, rows);
+      var hover = tileCenterCellInLattice(hoveredTile.x + 0.5, hoveredTile.y + 0.5, lattice, cols, rows);
       drawCursor(renderer, hover.x, hover.y, !hoveredTile.walkable);
     }
   }

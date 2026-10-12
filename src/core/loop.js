@@ -19,8 +19,24 @@ function createLoop(handlers) {
   var sampleLimit = 240;
   var stats = {
     frames: 0, fps: 0, frameMs: 0, renderMs: 0,
-    p50: 0, p95: 0, renderP95: 0, steps: 0, lastSteps: 0
+    p50: 0, p95: 0, renderP95: 0, steps: 0, lastSteps: 0,
+    // A single long frame moves p95 around and is indistinguishable from noise.
+    // Count frames that miss the budget (>25 ms, one vsync) and frames that
+    // really stutter (>33 ms, two vsyncs) -- the second is what a player sees,
+    // and it is what the audit asserts on.
+    drops: 0, stutters: 0, budgetMs: 25, stutterMs: 33.4
   };
+
+  function resetStats() {
+    frameSamples.length = 0;
+    renderSamples.length = 0;
+    stats.frames = 0;
+    stats.drops = 0;
+    stats.stutters = 0;
+    stats.p50 = 0;
+    stats.p95 = 0;
+    stats.renderP95 = 0;
+  }
 
   function percentile(samples, p) {
     if (!samples.length) return 0;
@@ -35,6 +51,8 @@ function createLoop(handlers) {
     if (frameSamples.length > sampleLimit) frameSamples.shift();
     if (renderSamples.length > sampleLimit) renderSamples.shift();
     stats.frames++;
+    if (frameMs > stats.budgetMs) stats.drops++;
+    if (frameMs > stats.stutterMs) stats.stutters++;
     stats.frameMs = frameMs;
     stats.renderMs = renderMs;
     stats.fps = frameMs > 0 ? 1000 / frameMs : 0;
@@ -71,6 +89,7 @@ function createLoop(handlers) {
 
   return {
     stats: stats,
+    resetStats: resetStats,
     start: function () {
       if (running) return;
       running = true;

@@ -16,6 +16,7 @@ var HUD_TEXT = {
   frameP95: "quadro p95",
   drawP95: "desenho p95",
   cells: "células",
+  resolution: "resolução",
   tick: "tique",
   seed: "semente",
   state: "estado",
@@ -33,7 +34,7 @@ var HUD_TEXT = {
   world: "mundo",
   moveMode: "movimento",
   wallSuffix: " parede",
-  hint: "W A S D andar · clique no chão caminha até o tile · F tela cheia · H detalhes · R semente · G regerar",
+  hint: "W A S D andar · clique no chão caminha até o tile · − / + resolução · F tela cheia · H detalhes · R semente · G regerar",
   moveClick: "clique",
   moveKeys: "teclado"
 };
@@ -77,17 +78,18 @@ function createHud(renderer) {
     var info = last;
     var metrics = renderer.metrics();
 
-    var box = panel(1, 1, 30, 12, HUD_TEXT.title);
+    var box = panel(1, 1, 30, 13, HUD_TEXT.title);
     row(box, 0, HUD_TEXT.fps, info.fpsText);
     row(box, 1, HUD_TEXT.frameP50, info.p50Text);
     row(box, 2, HUD_TEXT.frameP95, info.p95Text);
     row(box, 3, HUD_TEXT.drawP95, info.drawText);
     row(box, 4, HUD_TEXT.cells, info.cellsText);
-    row(box, 5, HUD_TEXT.tick, info.tick);
-    row(box, 6, HUD_TEXT.seed, info.seed);
-    row(box, 7, HUD_TEXT.state, info.stateHash);
-    row(box, 8, HUD_TEXT.mouseTile, info.mouseTile);
-    row(box, 9, HUD_TEXT.playerTile, info.playerTile);
+    row(box, 5, HUD_TEXT.resolution, info.resolutionText);
+    row(box, 6, HUD_TEXT.tick, info.tick);
+    row(box, 7, HUD_TEXT.seed, info.seed);
+    row(box, 8, HUD_TEXT.state, info.stateHash);
+    row(box, 9, HUD_TEXT.mouseTile, info.mouseTile);
+    row(box, 10, HUD_TEXT.playerTile, info.playerTile);
 
     if (debugVisible) {
       // Per-frame feedback (spans, bytes, rebuilt rows) lives HERE and not in the

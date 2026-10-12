@@ -80,6 +80,21 @@ outro Python e quebra a importação do Playwright/PIL.)
 | layout | sem barra de rolagem em 1440×900, 1280×633 e 390×844 |
 | arquivo | 61,7 KB, sem canvas, sem imagem, sem rede |
 
+## Rolagem suave (medido, não estético)
+
+Três defeitos reais desta fase, todos achados jogando e todos com medição antes/depois:
+
+| sintoma | causa | conserto | antes → depois |
+|---|---|---|---|
+| tela tremia na vertical | cada tile era arredondado para a célula por conta própria; o passo vertical é 1,5 célula, então metade das linhas cruzava o limiar de arredondamento em fase diferente | a malha é quantizada **uma vez por quadro** e todo tile/prop/entidade/cursor usa a mesma | controle negativo: a distância entre tiles fixos oscilava entre −22 e −23 células → valor único |
+| cenário "regenerando" ao andar | a câmera anda ~42 células/s (4,2 tiles/s × 10 células), então o conteúdo era reconstruído 42×/s: **79 de 160 quadros reescreviam a grade inteira**, 5,5 MB/s de HTML | conteúdo ancorado numa **malha grossa (8 células)**; o resto do deslocamento vira `transform` de CSS, arredondado ao pixel do dispositivo (glifos nítidos) | 0 reconstruções completas; 28 KB/quadro; deslize em 79 de 89 quadros |
+| HUD tremia junto | o HUD estava desenhado **dentro da grade do mundo**, então deslizava com ela e voltava a cada passo da malha | HUD é uma **segunda grade sobreposta** (`#hud`), mesma fonte e mesma célula (os painéis alinham), mas sem transform nenhum e sem camada compositada | HUD anda 0 px enquanto o mundo anda 43 px |
+
+Uma quarta, achada na mesma rodada: a textura das paredes era sorteada a partir da **célula na tela**
+(`cx*3 + x`), então a pedra fervia a cada passo da malha. O hash agora é **tile + offset local da
+forma** — invariante sob deslocamento inteiro da malha, e coberto pela checagem *art stability*
+(99 células amostradas, 0 diferenças).
+
 ## Regras do projeto
 
 - Código em inglês (ids, `data-*`, chaves de JSON, comentários, commits); texto visível ao jogador em
