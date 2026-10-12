@@ -181,18 +181,23 @@ def run(page):
     })()""")
     page.evaluate("window.ISO.teleport(%f, %f)" % (corridor["x"], corridor["y"]))
     page.wait_for_timeout(400)
+    walk_start = data(page, "({x: window.ISO.sim.player.x, y: window.ISO.sim.player.y, cam: [window.ISO.camera.x, window.ISO.camera.y]})")
     page.evaluate("window.ISO.loop.stats.frames = 0")
     page.keyboard.down("d")
     page.wait_for_timeout(4000)
-    walking = data(page, "({fps: window.ISO.loop.stats.fps, p50: window.ISO.loop.stats.p50, p95: window.ISO.loop.stats.p95, renderP95: window.ISO.loop.stats.renderP95, stats: window.ISO.debug.renderStats(), moved: [window.ISO.sim.player.x, window.ISO.sim.player.y]})")
+    walking = data(page, "({fps: window.ISO.loop.stats.fps, p50: window.ISO.loop.stats.p50, p95: window.ISO.loop.stats.p95, renderP95: window.ISO.loop.stats.renderP95, stats: window.ISO.debug.renderStats(), pos: [window.ISO.sim.player.x, window.ISO.sim.player.y], cam: [window.ISO.camera.x, window.ISO.camera.y]})")
     page.keyboard.up("d")
     page.wait_for_timeout(300)
+    walked_tiles = ((walking["pos"][0] - walk_start["x"]) ** 2 + (walking["pos"][1] - walk_start["y"]) ** 2) ** 0.5
+    camera_moved = ((walking["cam"][0] - walk_start["cam"][0]) ** 2 + (walking["cam"][1] - walk_start["cam"][1]) ** 2) ** 0.5
     check("andando (câmera rolando): 60 fps, p95 <= 25 ms e escrita proporcional ao que mudou na tela",
           walking["p95"] <= 25.0 and walking["fps"] >= 45
-          and walking["stats"]["rebuiltRows"] >= 5
+          and walked_tiles >= 3 and camera_moved >= 1
+          and walking["stats"]["rebuiltRows"] >= 3
           and walking["stats"]["htmlBytes"] < walking["stats"]["gridBytes"] * 0.5,
           {"fps": round(walking["fps"], 1), "p50": round(walking["p50"], 2), "p95": round(walking["p95"], 2),
            "renderP95": round(walking["renderP95"], 2),
+           "andou": round(walked_tiles, 1), "cameraAndou": round(camera_moved, 1),
            "kbPorQuadro": "%.0f de %.0f" % (walking["stats"]["htmlBytes"] / 1024, walking["stats"]["gridBytes"] / 1024),
            "linhas": "%d/%d" % (walking["stats"]["rebuiltRows"], walking["stats"]["rows"])})
     check("pior caso: o custo de render fica dentro do orçamento de 8 ms",
@@ -292,6 +297,18 @@ def run(page):
     check("arte: grade com tinta suficiente e variedade de glifos",
           hud_probe["inked"] > hud_probe["rows"] * hud_probe["cols"] * 0.15 and hud_probe["distinct"] > 25,
           {"inked": hud_probe["inked"], "cells": hud_probe["rows"] * hud_probe["cols"], "distinct": hud_probe["distinct"]})
+
+    # 9b. a paleta precisa ser clara o bastante: um glifo cobre só parte da célula,
+    # então cor escura de tinta = tela quase preta (medido: p90 de luminância 30).
+    palette = data(page, """(() => {
+      function lum(c) { return Math.round(0.2126 * ((c >> 16) & 255) + 0.7152 * ((c >> 8) & 255) + 0.0722 * (c & 255)); }
+      return {floor: lum(PALETTE.floor[0]), wallTop: lum(PALETTE.wallTop), wallLeft: lum(PALETTE.wallLeft),
+              hero: lum(PALETTE.heroCloak), gold: lum(PALETTE.gold), panelLine: lum(PALETTE.panelLine),
+              bone: lum(PALETTE.bone2)};
+    })()""")
+    check("paleta: tinta clara o suficiente para ler em arte de texto",
+          palette["floor"] >= 70 and palette["wallTop"] >= 110 and palette["wallLeft"] >= 60
+          and palette["gold"] >= 120 and palette["bone"] >= 150, palette)
 
     # 10. layout: nada de barra de rolagem, grade preenchendo a tela ---------
     desktop = layout(page)
