@@ -640,6 +640,35 @@ def engine_checks(page, html_path, report_png=None):
     check("camera: follows the actor in both axes from the spawn (the world gives it room)",
           follow["okX"] and follow["okY"], follow)
 
+    # 10g. combat machinery ----------------------------------------------------
+    # Engine fixtures, not a game: the parts that must behave identically for every
+    # game built on the engine. Each claim comes with the fixture that could falsify
+    # it (a blow lands once; range alone would allow the shot through the wall;
+    # a constant damage would never differ between seeds).
+    machinery = data(page, "window.ISO.headless.combat(40)")
+    check("combat: a swing lands exactly one blow, on the tick the windup ends",
+          machinery["swing"]["hits"] == 1 and machinery["swing"]["landedOnWindupEnd"],
+          machinery["swing"])
+    check("combat: a swing cannot start again mid-swing or during the cooldown, and can after",
+          machinery["cooldown"]["refusedMidSwing"] and machinery["cooldown"]["refusedDuringCooldown"]
+          and machinery["cooldown"]["readyAgain"], machinery["cooldown"])
+    check("combat: damage replays for a seed and moves with the seed",
+          machinery["damage"]["sameSeed"] and machinery["damage"]["otherSeedDiffers"]
+          and machinery["damage"]["max"] > machinery["damage"]["min"], machinery["damage"])
+    check("combat: a blow does not land through a wall (range alone would allow it)",
+          machinery["lineOfSight"]["visibleInReach"] and not machinery["lineOfSight"]["behindInReach"]
+          and machinery["lineOfSight"]["behindByRangeAlone"], machinery["lineOfSight"])
+    check("combat: the registry returns exactly what is inside the radius and drops what is off-grid",
+          machinery["registry"]["insideRadius1"] == 2 and machinery["registry"]["insideRadius30"] == 3
+          and machinery["registry"]["droppedOutside"] == 1, machinery["registry"])
+    check("combat: a blow never overkills, and a corpse takes nothing",
+          machinery["kill"]["firstDamage"] == 7 and machinery["kill"]["secondDamage"] == 3
+          and machinery["kill"]["killed"] and machinery["kill"]["corpseDamage"] == 0,
+          machinery["kill"])
+    check("rng streams: named streams are independent, and the same name gives the same stream",
+          machinery["streams"]["sameNameSameStream"] and machinery["streams"]["independent"],
+          machinery["streams"])
+
     # 11. layout: no scrollbar, grid covering the screen -----------------------
     page.set_viewport_size({"width": 1280, "height": 633})
     settle(page, 700)

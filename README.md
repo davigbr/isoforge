@@ -29,7 +29,7 @@ navegador parseia e re-layouta.
 - **Rotas por A\* com custos inteiros**: clique atrás de parede é contornado, destino
   bloqueado vai para o piso ao lado, e a mesma pergunta dá sempre a mesma rota.
 - Motor e jogo separados: este repositório é o motor; os jogos vendoram `dist/`.
-- 36 invariantes verificadas em um Chromium de verdade, com controle negativo.
+- 43 invariantes verificadas em um Chromium de verdade, com controle negativo.
 
 ## O que não é
 
@@ -94,7 +94,7 @@ docs/engine.md  referência da API e armadilhas medidas
 
 ```sh
 pip install playwright && playwright install chromium
-python3 tools/audit_engine.py                      # 36 checagens no jogo de exemplo
+python3 tools/audit_engine.py                      # 43 checagens no jogo de exemplo
 python3 tools/audit_engine.py --html cripta.html   # roda em QUALQUER jogo do motor
 python3 tools/audit_engine.py --negative-control   # +1 checagem: prova que a de rigidez pode falhar
 ```
@@ -156,7 +156,7 @@ desenhado, e a auditoria varre com ele a cópia que o jogo declara.
 
 ## Estado
 
-Motor em **0.6.0**, auditoria **36/36** na arena de exemplo (**37/37** com o controle
+Motor em **0.7.0**, auditoria **43/43** na arena de exemplo (**44/44** com o controle
 negativo). O plano da fase 0 está em
 [`docs/plan-fase-0.md`](docs/plan-fase-0.md) e o caminho até um ARPG completo, em
 [`docs/roadmap-arpg.md`](docs/roadmap-arpg.md) — a fase 1 (rotas) já está entregue.

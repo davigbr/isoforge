@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Isoforge — arena</title>
 <meta name="color-scheme" content="dark">
-<!-- engine: isoforge 0.6.0 e323a399371d4ee3568700bf876e556a4c058490 -->
+<!-- engine: isoforge 0.7.0 93bf43f2a2811fe55153163a69ea41d1579bdaee -->
 <style>
 /* Isoforge engine stylesheet: everything the engine itself needs to be a
    terminal. A game MUST NOT redefine these rules -- it inlines this file first
@@ -95,7 +95,7 @@ html, body {
 <pre id="screen" tabindex="0" spellcheck="false"></pre>
 <pre id="hud" aria-hidden="true" spellcheck="false"></pre>
 <script>
-// Isoforge 0.6.0 -- 2:1 isometric, text-mode, deterministic, offline.
+// Isoforge 0.7.0 -- 2:1 isometric, text-mode, deterministic, offline.
 // Assembled from src/ by build.py. DO NOT EDIT: edit the modules and rebuild.
 var Isoforge = (function () {
 "use strict";
@@ -115,7 +115,7 @@ var Isoforge = (function () {
 // Everything derived is kept in plain module vars (recomputed by configure())
 // so the hot loops read a variable instead of walking an object.
 
-var ENGINE_VERSION = "0.6.0";
+var ENGINE_VERSION = "0.7.0";
 
 var EngineConfig = {
   tileCellsW: 10,          // width of one world tile, in character cells
@@ -208,6 +208,24 @@ function quantize(value) {
 function clamp(value, low, high) {
   if (low > high) return (low + high) / 2;
   return value < low ? low : (value > high ? high : value);
+}
+
+// Independent streams out of one seed, named rather than numbered. This is what keeps
+// a loot roll from consuming a number the monster AI would have consumed: with a
+// single stream, adding a feature that draws a random number shifts every creature
+// after it and the determinism audit breaks somewhere unrelated -- and very hard to
+// find. Names survive reordering; indices do not.
+function createRngStreams(seed) {
+  var cache = {};
+  return function stream(name) {
+    var key = String(name);
+    if (!cache[key]) {
+      var h = hash32Init();
+      for (var i = 0; i < key.length; i++) h = hash32Mix(h, key.charCodeAt(i));
+      cache[key] = createRng((seed ^ h) >>> 0);
+    }
+    return cache[key];
+  };
 }
 
 // ---- core/iso.js -------------------------------------------------------
@@ -1772,6 +1790,212 @@ function followCamera(camera, targetX, targetY, dt, rate) {
   camera.y += (targetY - camera.y) * follow;
 }
 
+// ---- sim/combat.js -----------------------------------------------------
+// Combat: the machinery, not the numbers. A game supplies stats and this module
+// answers three questions -- did the blow land, how much did it take, and when.
+//
+// Three things here are load-bearing:
+//
+//   - A swing lands EXACTLY ONE blow, at the boundary between windup and hit.
+//     Firing once per tick would multiply the damage by the length of the phase, and
+//     the bug would only show up as "monsters die too fast".
+//   - Phases are counted in TICKS, not milliseconds. The engine runs a fixed step, so
+//     ticks are the only unit that replays identically; seconds would depend on how
+//     many steps a frame happened to run.
+//   - Damage is whole numbers. A blow that drops hp to zero has to drop it by an
+//     integer, and rounding at the end (not in the middle) keeps a chain of
+//     modifiers from drifting.
+//
+// Attack timing is what gives a Diablo-like its weight (windup, hit, recovery), so it
+// lives here rather than in the game: it is the part that must not differ per game.
+
+var SWING_IDLE = "idle";
+var SWING_WINDUP = "windup";
+var SWING_HIT = "hit";
+var SWING_RECOVERY = "recovery";
+
+function createSwing(spec) {
+  spec = spec || {};
+  return {
+    windup: Math.max(1, spec.windup || 8),
+    hit: Math.max(1, spec.hit === undefined ? 2 : spec.hit),
+    recovery: Math.max(1, spec.recovery || 10),
+    // Waiting between blows. Bearable for the player and cheap to test: a swing
+    // cannot start while this is positive.
+    cooldown: Math.max(0, spec.cooldown === undefined ? 16 : spec.cooldown),
+    ticks: 0,
+    phase: SWING_IDLE,
+    fired: false,
+    ready: 0
+  };
+}
+
+function totalSwingTicks(swing) {
+  return swing.windup + swing.hit + swing.recovery;
+}
+
+// Progress through the whole swing in 0..1: what an animation reads. Kept here (and
+// not recomputed by the art) so the picture and the blow cannot disagree about when
+// the hit happens.
+function swingProgress(swing) {
+  if (swing.phase === SWING_IDLE) return 0;
+  var total = totalSwingTicks(swing);
+  return Math.min(1, swing.ticks / total);
+}
+
+function beginSwing(swing) {
+  if (swing.phase !== SWING_IDLE || swing.ready > 0) return false;
+  swing.ticks = 0;
+  swing.phase = SWING_WINDUP;
+  swing.fired = false;
+  return true;
+}
+
+// Advance one tick. Returns "hit" on the single tick the blow lands, else null.
+function stepSwing(swing) {
+  if (swing.phase === SWING_IDLE) {
+    if (swing.ready > 0) swing.ready--;
+    return null;
+  }
+  swing.ticks++;
+  var was = swing.phase;
+  var total = totalSwingTicks(swing);
+  if (swing.ticks <= swing.windup) swing.phase = SWING_WINDUP;
+  else if (swing.ticks <= swing.windup + swing.hit) swing.phase = SWING_HIT;
+  else if (swing.ticks <= total) swing.phase = SWING_RECOVERY;
+  else {
+    swing.phase = SWING_IDLE;
+    swing.ready = swing.cooldown;
+    return null;
+  }
+  if (swing.phase === SWING_HIT && was !== SWING_HIT && !swing.fired) {
+    swing.fired = true;
+    return "hit";
+  }
+  return null;
+}
+
+// One place where a number becomes damage. Order is fixed and documented: roll the
+// base range, add flat bonuses, apply multiplicative modifiers, then the target's
+// resistance, then round once. The rng is required -- damage with no roll is a
+// constant, and a constant hides every bug that a spread would expose.
+function rollDamage(spec, rng) {
+  var min = spec.min === undefined ? 1 : spec.min;
+  var max = spec.max === undefined ? min : spec.max;
+  var base = min + Math.floor(rng() * (max - min + 1));
+  var total = base + (spec.add || 0);
+  var mods = spec.mods || [];
+  for (var i = 0; i < mods.length; i++) total *= mods[i];
+  if (spec.resist) total *= (1 - spec.resist);
+  var out = Math.round(total);
+  return out < 1 ? 1 : out;
+}
+
+// A landed blow always takes at least one point and never more than what is left:
+// overkill would make a kill depend on the exact hp, which the save has to round.
+function applyDamage(stats, amount) {
+  if (stats.hp <= 0) return { damage: 0, killed: false, hp: 0 };
+  var dealt = Math.min(stats.hp, amount);
+  stats.hp -= dealt;
+  return { damage: dealt, killed: stats.hp <= 0, hp: stats.hp };
+}
+
+// Reach plus line of sight: a blow does not go through a wall. Both halves are
+// needed -- range alone lets a player hit through a corner.
+function inReach(attacker, target, range, grid) {
+  var reach = range + (attacker.radius || 0) + (target.radius || 0);
+  var dx = target.x - attacker.x;
+  var dy = target.y - attacker.y;
+  if (dx * dx + dy * dy > reach * reach) return false;
+  if (grid && !hasLineOfSight(grid, attacker.x, attacker.y, target.x, target.y)) return false;
+  return true;
+}
+
+// What a game asks before drawing the swing: which side the body turns to. Screen
+// sides, not world sides: the projection maps world diagonals onto the screen axes,
+// so "left" means the world direction (+y, -x) and the art mirrors on that.
+function facingFor(attacker, target) {
+  var dx = target.x - attacker.x;
+  var dy = target.y - attacker.y;
+  var screenX = dx - dy;
+  var screenY = dx + dy;
+  if (Math.abs(screenX) >= Math.abs(screenY)) return screenX >= 0 ? 1 : -1;
+  return screenY >= 0 ? 2 : 0;   // 2 = toward the viewer, 0 = away
+}
+
+// Uniform buckets over the tile grid. Every swing, pickup and AI tick asks "who is
+// near me"; scanning the entity list per query is O(n) per query, which is O(n^2)
+// per frame with a few hundred monsters -- the cost that turns a demo into a stall.
+function createRegistry(bucketTiles) {
+  var size = bucketTiles || 4;
+  var cols = 0;
+  var rows = 0;
+  var buckets = [];
+  var members = 0;
+
+  function resize(grid) {
+    var nextCols = Math.max(1, Math.ceil(grid.width / size));
+    var nextRows = Math.max(1, Math.ceil(grid.height / size));
+    if (nextCols === cols && nextRows === rows) return;
+    cols = nextCols;
+    rows = nextRows;
+    buckets = [];
+    for (var i = 0; i < cols * rows; i++) buckets.push([]);
+  }
+
+  function clear() {
+    for (var i = 0; i < buckets.length; i++) buckets[i].length = 0;
+    members = 0;
+  }
+
+  function add(entity) {
+    var bx = Math.floor(entity.x / size);
+    var by = Math.floor(entity.y / size);
+    if (bx < 0 || by < 0 || bx >= cols || by >= rows) return;
+    buckets[by * cols + bx].push(entity);
+    members++;
+  }
+
+  // Rebuilt every frame from the live entity list: O(n), and it cannot go stale. Pass
+  // `out` to reuse an array and keep the frame allocation-free.
+  function rebuild(entities) {
+    clear();
+    for (var i = 0; i < entities.length; i++) add(entities[i]);
+  }
+
+  function query(x, y, radius, out) {
+    out = out || [];
+    out.length = 0;
+    var x0 = Math.max(0, Math.floor((x - radius) / size));
+    var x1 = Math.min(cols - 1, Math.floor((x + radius) / size));
+    var y0 = Math.max(0, Math.floor((y - radius) / size));
+    var y1 = Math.min(rows - 1, Math.floor((y + radius) / size));
+    var r2 = radius * radius;
+    for (var by = y0; by <= y1; by++) {
+      for (var bx = x0; bx <= x1; bx++) {
+        var bucket = buckets[by * cols + bx];
+        for (var i = 0; i < bucket.length; i++) {
+          var e = bucket[i];
+          var dx = e.x - x;
+          var dy = e.y - y;
+          if (dx * dx + dy * dy <= r2) out.push(e);
+        }
+      }
+    }
+    return out;
+  }
+
+  return {
+    resize: resize,
+    clear: clear,
+    rebuild: rebuild,
+    query: query,
+    members: function () { return members; },
+    bucketCount: function () { return cols * rows; },
+    bucketSize: function () { return size; }
+  };
+}
+
 // ---- sim/headless.js ---------------------------------------------------
 // Headless entry points: engine invariants a game can be asked about without a
 // browser. The game supplies its own scene factory, so the same checks run
@@ -1976,12 +2200,142 @@ function createHeadless(options) {
     };
   }
 
+  // Combat machinery, against the engine's own fixtures: no game involved, because
+  // this is the part that has to behave identically for every game built on it. Each
+  // claim is paired with a fixture that could falsify it.
+  function combat(cases) {
+    cases = cases || 40;
+
+    // 1. Exactly one blow per swing, landing the tick the windup ends.
+    var swing = createSwing({ windup: 6, hit: 2, recovery: 4, cooldown: 3 });
+    var hits = [];
+    var phases = [];
+    beginSwing(swing);
+    for (var t = 1; t <= 40; t++) {
+      if (stepSwing(swing) === "hit") hits.push(t);
+      if (phases.length < 16) phases.push(swing.phase);
+    }
+    var swingReport = {
+      hits: hits.length,
+      firstHitTick: hits.length ? hits[0] : null,
+      windup: swing.windup,
+      landedOnWindupEnd: hits.length === 1 && hits[0] === swing.windup + 1,
+      phases: phases.join(",")
+    };
+
+    // 2. A swing cannot restart until it has finished AND the cooldown expired. The
+    //    first version of this fixture was wrong: it re-began a swing that had already
+    //    recovered (so "refused" was false) and that left the later "readyAgain" blocked.
+    var swing2 = createSwing({ windup: 3, hit: 1, recovery: 2, cooldown: 4 });
+    beginSwing(swing2);
+    stepSwing(swing2);                       // mid-windup
+    var refusedMidSwing = !beginSwing(swing2);
+    for (var f = 0; f < 6; f++) stepSwing(swing2);   // finishes; idle with ready = 4
+    var refusedDuringCooldown = !beginSwing(swing2);
+    for (var g = 0; g < 4; g++) stepSwing(swing2);   // cooldown drains
+    var readyAgain = beginSwing(swing2);
+    var cooldownReport = {
+      refusedMidSwing: refusedMidSwing,
+      refusedDuringCooldown: refusedDuringCooldown,
+      readyAgain: readyAgain,
+      cooldown: swing2.cooldown
+    };
+
+    // 3. Damage replays for a seed and moves with the seed: a constant would hide
+    //    every bug a spread exposes.
+    function damageRun(seed) {
+      var rng = createRng(seed);
+      var out = [];
+      for (var i = 0; i < cases; i++) out.push(rollDamage({ min: 3, max: 9, add: 2, mods: [1.5] }, rng));
+      return out;
+    }
+    var d1 = damageRun(7);
+    var d2 = damageRun(7);
+    var d3 = damageRun(99);
+    var damageReport = {
+      sameSeed: d1.join(",") === d2.join(","),
+      otherSeedDiffers: d1.join(",") !== d3.join(","),
+      min: Math.min.apply(null, d1),
+      max: Math.max.apply(null, d1),
+      sample: d1.slice(0, 5)
+    };
+
+    // 4. A blow does not go through a wall -- and range alone would allow it, which is
+    //    the control that proves the line-of-sight half is doing the work. The grid is
+    //    opened explicitly: a fresh grid defaults to solid, so "visibleInReach" would
+    //    have failed for a reason that has nothing to do with line of sight.
+    var wallGrid = createGrid(11, 3);
+    for (var gx = 0; gx < 11; gx++) wallGrid.setWalkable(gx, 1, true);
+    wallGrid.setWalkable(5, 1, false);
+    var attacker = { x: 1.5, y: 1.5, radius: 0 };
+    var visible = { x: 4.5, y: 1.5, radius: 0 };
+    var behind = { x: 7.5, y: 1.5, radius: 0 };
+    var losReport = {
+      visibleInReach: inReach(attacker, visible, 8, wallGrid),
+      behindInReach: inReach(attacker, behind, 8, wallGrid),
+      behindByRangeAlone: inReach(attacker, behind, 8, null),
+      distance: 6
+    };
+
+    // 5. The registry returns exactly what is inside the radius, and drops what falls
+    //    outside the grid instead of silently mis-bucketing it.
+    var registry = createRegistry(4);
+    registry.resize(wallGrid);
+    var list = [{ x: 1.2, y: 1.2 }, { x: 1.8, y: 2.2 }, { x: 9.5, y: 2.5 }, { x: 20, y: 20 }];
+    registry.rebuild(list);
+    var registryReport = {
+      listed: list.length,
+      members: registry.members(),
+      droppedOutside: list.length - registry.members(),
+      insideRadius1: registry.query(1.5, 1.5, 1.0, []).length,
+      insideRadius30: registry.query(1.5, 1.5, 30, []).length,
+      bucketSize: registry.bucketSize()
+    };
+
+    // 6. A landed blow takes at least one point, never more than what is left, and a
+    //    corpse takes nothing.
+    var victim = { hp: 10 };
+    var first = applyDamage(victim, 7);
+    var second = applyDamage(victim, 7);
+    var onCorpse = applyDamage(victim, 7);
+    var killReport = {
+      firstDamage: first.damage, hpAfterFirst: first.hp,
+      secondDamage: second.damage, killed: second.killed,
+      corpseDamage: onCorpse.damage, corpseKilled: onCorpse.killed
+    };
+
+    // 7. Named streams are independent and stable: the loot roll cannot shift the AI.
+    var streams = createRngStreams(1234);
+    var loot = streams("loot");
+    var ai = streams("ai");
+    var lootValues = [];
+    var aiValues = [];
+    for (var k = 0; k < 8; k++) { lootValues.push(loot()); aiValues.push(ai()); }
+    var streamsReport = {
+      sameNameSameStream: streams("loot") === loot,
+      independent: lootValues.join(",") !== aiValues.join(","),
+      lootSample: lootValues.slice(0, 3)
+    };
+
+    return {
+      cases: cases,
+      swing: swingReport,
+      cooldown: cooldownReport,
+      damage: damageReport,
+      lineOfSight: losReport,
+      registry: registryReport,
+      kill: killReport,
+      streams: streamsReport
+    };
+  }
+
   return {
     determinism: determinism,
     loopClosure: loopClosure,
     projectionRoundTrip: projectionRoundTrip,
     culling: culling,
-    paths: paths
+    paths: paths,
+    combat: combat
   };
 }
 
@@ -2163,6 +2517,7 @@ function engineSurface() {
 
     rng: {
       createRng: createRng,
+      createStreams: createRngStreams,
       randomSeed: randomSeed,
       quantize: quantize,
       clamp: clamp
@@ -2184,6 +2539,21 @@ function engineSurface() {
     },
     persist: { createStore: createStore },
     headless: createHeadless,
+
+    // Combat: swings, damage and neighbour queries. The game owns the numbers.
+    combat: {
+      createSwing: createSwing,
+      beginSwing: beginSwing,
+      stepSwing: stepSwing,
+      swingProgress: swingProgress,
+      totalSwingTicks: totalSwingTicks,
+      rollDamage: rollDamage,
+      applyDamage: applyDamage,
+      inReach: inReach,
+      facingFor: facingFor,
+      createRegistry: createRegistry,
+      phases: { idle: SWING_IDLE, windup: SWING_WINDUP, hit: SWING_HIT, recovery: SWING_RECOVERY }
+    },
 
     // Test plumbing, in the engine and not in the games: a game exposes the
     // contract object and the engine's audit can drive any game built this way.

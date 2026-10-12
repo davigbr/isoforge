@@ -29,3 +29,21 @@ function clamp(value, low, high) {
   if (low > high) return (low + high) / 2;
   return value < low ? low : (value > high ? high : value);
 }
+
+// Independent streams out of one seed, named rather than numbered. This is what keeps
+// a loot roll from consuming a number the monster AI would have consumed: with a
+// single stream, adding a feature that draws a random number shifts every creature
+// after it and the determinism audit breaks somewhere unrelated -- and very hard to
+// find. Names survive reordering; indices do not.
+function createRngStreams(seed) {
+  var cache = {};
+  return function stream(name) {
+    var key = String(name);
+    if (!cache[key]) {
+      var h = hash32Init();
+      for (var i = 0; i < key.length; i++) h = hash32Mix(h, key.charCodeAt(i));
+      cache[key] = createRng((seed ^ h) >>> 0);
+    }
+    return cache[key];
+  };
+}

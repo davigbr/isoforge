@@ -20,9 +20,9 @@ Decisões assumidas (recomendadas pelo autor do plano, revisáveis):
 | # | item | onde | estado | tamanho |
 |---|---|---|---|---|
 | 1 | **Achar caminho e seguir** — rota por volta dos obstáculos, recalculada quando algo bloqueia | motor | **entregue** | 1 sessão |
-| 2 | **Combate e criaturas com números** — entidade (vida, time, raio, camada), acerto/erro, dano com modificadores, morte/remoção, tempos de golpe, esperas e recargas em tiques, índice espacial para consultas de vizinhança | motor | — | 1–2 |
-| 3 | **Save confiável** — esquema versionado, escrita atômica, migração, corrupção tolerada; salva personagem e progresso, nunca o mapa (o mapa sai da semente) | motor | — | 1 |
-| 4 | **Sorteio separado por finalidade** — geradores distintos para loot, IA e variação de dano, senão gastar um número num sistema desalinha os outros | motor | — | ¼ |
+| 2 | **Combate e criaturas com números** — entidade (vida, time, raio, camada), acerto/erro, dano com modificadores, morte/remoção, tempos de golpe, esperas e recargas em tiques, índice espacial para consultas de vizinhança | motor | **fatia entregue**: golpe com preparo-acertar-recuperar, dano, morte, item no chão, coleta; alvo ainda passivo | 1–2 |
+| 3 | **Save confiável** — esquema versionado, escrita atômica, migração, corrupção tolerada; salva personagem e progresso, nunca o mapa (o mapa sai da semente) | motor | próxima | 1 |
+| 4 | **Sorteio separado por finalidade** — geradores distintos para loot, IA e variação de dano, senão gastar um número num sistema desalinha os outros | motor | **entregue** (`rng.createStreams`) | ¼ |
 
 ## P1 — o que faz *parecer* um ARPG
 

@@ -201,11 +201,141 @@ function createHeadless(options) {
     };
   }
 
+  // Combat machinery, against the engine's own fixtures: no game involved, because
+  // this is the part that has to behave identically for every game built on it. Each
+  // claim is paired with a fixture that could falsify it.
+  function combat(cases) {
+    cases = cases || 40;
+
+    // 1. Exactly one blow per swing, landing the tick the windup ends.
+    var swing = createSwing({ windup: 6, hit: 2, recovery: 4, cooldown: 3 });
+    var hits = [];
+    var phases = [];
+    beginSwing(swing);
+    for (var t = 1; t <= 40; t++) {
+      if (stepSwing(swing) === "hit") hits.push(t);
+      if (phases.length < 16) phases.push(swing.phase);
+    }
+    var swingReport = {
+      hits: hits.length,
+      firstHitTick: hits.length ? hits[0] : null,
+      windup: swing.windup,
+      landedOnWindupEnd: hits.length === 1 && hits[0] === swing.windup + 1,
+      phases: phases.join(",")
+    };
+
+    // 2. A swing cannot restart until it has finished AND the cooldown expired. The
+    //    first version of this fixture was wrong: it re-began a swing that had already
+    //    recovered (so "refused" was false) and that left the later "readyAgain" blocked.
+    var swing2 = createSwing({ windup: 3, hit: 1, recovery: 2, cooldown: 4 });
+    beginSwing(swing2);
+    stepSwing(swing2);                       // mid-windup
+    var refusedMidSwing = !beginSwing(swing2);
+    for (var f = 0; f < 6; f++) stepSwing(swing2);   // finishes; idle with ready = 4
+    var refusedDuringCooldown = !beginSwing(swing2);
+    for (var g = 0; g < 4; g++) stepSwing(swing2);   // cooldown drains
+    var readyAgain = beginSwing(swing2);
+    var cooldownReport = {
+      refusedMidSwing: refusedMidSwing,
+      refusedDuringCooldown: refusedDuringCooldown,
+      readyAgain: readyAgain,
+      cooldown: swing2.cooldown
+    };
+
+    // 3. Damage replays for a seed and moves with the seed: a constant would hide
+    //    every bug a spread exposes.
+    function damageRun(seed) {
+      var rng = createRng(seed);
+      var out = [];
+      for (var i = 0; i < cases; i++) out.push(rollDamage({ min: 3, max: 9, add: 2, mods: [1.5] }, rng));
+      return out;
+    }
+    var d1 = damageRun(7);
+    var d2 = damageRun(7);
+    var d3 = damageRun(99);
+    var damageReport = {
+      sameSeed: d1.join(",") === d2.join(","),
+      otherSeedDiffers: d1.join(",") !== d3.join(","),
+      min: Math.min.apply(null, d1),
+      max: Math.max.apply(null, d1),
+      sample: d1.slice(0, 5)
+    };
+
+    // 4. A blow does not go through a wall -- and range alone would allow it, which is
+    //    the control that proves the line-of-sight half is doing the work. The grid is
+    //    opened explicitly: a fresh grid defaults to solid, so "visibleInReach" would
+    //    have failed for a reason that has nothing to do with line of sight.
+    var wallGrid = createGrid(11, 3);
+    for (var gx = 0; gx < 11; gx++) wallGrid.setWalkable(gx, 1, true);
+    wallGrid.setWalkable(5, 1, false);
+    var attacker = { x: 1.5, y: 1.5, radius: 0 };
+    var visible = { x: 4.5, y: 1.5, radius: 0 };
+    var behind = { x: 7.5, y: 1.5, radius: 0 };
+    var losReport = {
+      visibleInReach: inReach(attacker, visible, 8, wallGrid),
+      behindInReach: inReach(attacker, behind, 8, wallGrid),
+      behindByRangeAlone: inReach(attacker, behind, 8, null),
+      distance: 6
+    };
+
+    // 5. The registry returns exactly what is inside the radius, and drops what falls
+    //    outside the grid instead of silently mis-bucketing it.
+    var registry = createRegistry(4);
+    registry.resize(wallGrid);
+    var list = [{ x: 1.2, y: 1.2 }, { x: 1.8, y: 2.2 }, { x: 9.5, y: 2.5 }, { x: 20, y: 20 }];
+    registry.rebuild(list);
+    var registryReport = {
+      listed: list.length,
+      members: registry.members(),
+      droppedOutside: list.length - registry.members(),
+      insideRadius1: registry.query(1.5, 1.5, 1.0, []).length,
+      insideRadius30: registry.query(1.5, 1.5, 30, []).length,
+      bucketSize: registry.bucketSize()
+    };
+
+    // 6. A landed blow takes at least one point, never more than what is left, and a
+    //    corpse takes nothing.
+    var victim = { hp: 10 };
+    var first = applyDamage(victim, 7);
+    var second = applyDamage(victim, 7);
+    var onCorpse = applyDamage(victim, 7);
+    var killReport = {
+      firstDamage: first.damage, hpAfterFirst: first.hp,
+      secondDamage: second.damage, killed: second.killed,
+      corpseDamage: onCorpse.damage, corpseKilled: onCorpse.killed
+    };
+
+    // 7. Named streams are independent and stable: the loot roll cannot shift the AI.
+    var streams = createRngStreams(1234);
+    var loot = streams("loot");
+    var ai = streams("ai");
+    var lootValues = [];
+    var aiValues = [];
+    for (var k = 0; k < 8; k++) { lootValues.push(loot()); aiValues.push(ai()); }
+    var streamsReport = {
+      sameNameSameStream: streams("loot") === loot,
+      independent: lootValues.join(",") !== aiValues.join(","),
+      lootSample: lootValues.slice(0, 3)
+    };
+
+    return {
+      cases: cases,
+      swing: swingReport,
+      cooldown: cooldownReport,
+      damage: damageReport,
+      lineOfSight: losReport,
+      registry: registryReport,
+      kill: killReport,
+      streams: streamsReport
+    };
+  }
+
   return {
     determinism: determinism,
     loopClosure: loopClosure,
     projectionRoundTrip: projectionRoundTrip,
     culling: culling,
-    paths: paths
+    paths: paths,
+    combat: combat
   };
 }

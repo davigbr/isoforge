@@ -92,6 +92,7 @@ function engineSurface() {
 
     rng: {
       createRng: createRng,
+      createStreams: createRngStreams,
       randomSeed: randomSeed,
       quantize: quantize,
       clamp: clamp
@@ -113,6 +114,21 @@ function engineSurface() {
     },
     persist: { createStore: createStore },
     headless: createHeadless,
+
+    // Combat: swings, damage and neighbour queries. The game owns the numbers.
+    combat: {
+      createSwing: createSwing,
+      beginSwing: beginSwing,
+      stepSwing: stepSwing,
+      swingProgress: swingProgress,
+      totalSwingTicks: totalSwingTicks,
+      rollDamage: rollDamage,
+      applyDamage: applyDamage,
+      inReach: inReach,
+      facingFor: facingFor,
+      createRegistry: createRegistry,
+      phases: { idle: SWING_IDLE, windup: SWING_WINDUP, hit: SWING_HIT, recovery: SWING_RECOVERY }
+    },
 
     // Test plumbing, in the engine and not in the games: a game exposes the
     // contract object and the engine's audit can drive any game built this way.

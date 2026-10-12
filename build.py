@@ -45,6 +45,7 @@ MODULES = [
     "sim/grid.js",
     "sim/pathfind.js",
     "sim/actor.js",
+    "sim/combat.js",
     "sim/headless.js",
     "ui/hud.js",
     "engine.js",

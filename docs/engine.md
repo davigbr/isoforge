@@ -138,6 +138,17 @@ auditoria exige. Um destino dentro de parede não é recusado: vai para o piso
 andável mais próximo (`nearestWalkable`), que é o que um clique no cenário pede.
 Separado de `actor`: jogo por turnos ou planejamento quer a busca sem a locomoção.
 
+### `combat` — golpe, dano e vizinhança
+`createSwing({windup, hit, recovery, cooldown})` · `beginSwing` · `stepSwing` (devolve
+`"hit"` no **único** tique em que o golpe cai) · `swingProgress` · `totalSwingTicks` ·
+`rollDamage({min, max, add, mods, resist}, rng)` · `applyDamage(stats, n)` ·
+`inReach(atacante, alvo, alcance, grid)` (alcance **e** linha de visão: golpe não
+atravessa parede) · `facingFor(atacante, alvo)` (lado da TELA para onde o corpo vira) ·
+`createRegistry(bucket)` (índice espacial: "quem está perto" em O(1) por consulta).
+Tempos em **tiques**, não milissegundos: é a única unidade que replaya idêntico. Dano em
+números inteiros com ordem fixa (base → aditivos → multiplicativos → resistência →
+arredonda uma vez).
+
 ### `view` — ordem de desenho e culling
 `createWorldView(renderer, art)`. O `art` é uma tabela de callbacks:
 `floor`, `block`, `prop: { nome: fn }`, `propAt(tx, ty, grid)`,
@@ -193,9 +204,15 @@ a resolução do save) · `clamp(v, lo, hi)`.
     contrato até lá, amostrando a cada tique que ele nunca está dentro da parede;
 18. câmera: partindo do **spawn** (não do meio do mundo, que esconde o defeito), o
     ator anda uma rota real em cada eixo e a câmera tem de acompanhar — o que exige
-    que o spawn esteja dentro da faixa de clamp e que o mundo dê folga à vista.
+    que o spawn esteja dentro da faixa de clamp e que o mundo dê folga à vista;
+19. combate, contra fixtures do próprio motor: um golpe cai **uma vez**, no tique em
+    que o preparo acaba; o golpe não reinicia em pleno golpe nem durante a espera;
+    dano replaya por semente e muda com ela; golpe não atravessa parede (e o controle
+    mostra que só o alcance permitiria); o índice espacial devolve exatamente o que
+    está no raio e descarta o que cai fora do grid; um golpe nunca causa dano além da
+    vida e um corpo morto não leva golpe; sorteios com nome são independentes.
 
-São **36 checagens** no jogo de exemplo (49 na cripta, contando as do jogo).
+São **43 checagens** no jogo de exemplo (60 na cripta, contando as do jogo).
 
 `--negative-control` quebra a malha numa cópia da página e exige que a checagem
 9 **falhe** ali. Um teste que nunca falhou não prova nada.
@@ -242,6 +259,18 @@ Cada uma custou uma rodada de investigação; estão aqui para não custarem de 
 - **Testar a câmera a partir do centro do mundo esconde esse defeito**: passou no
   mundo que tinha o bug. O teste tem de partir de onde o jogo põe o jogador, e a folga
   exigida tem de ser derivada da vista (metade dela), não um número solto de tiles.
+- **Editar `src/` do motor sem reconstruir `dist/` deixa o jogo vendorado rodando um
+  motor velho — e nem a checagem de versão nem a de hash pegam isso**, porque a versão
+  não mudou. O jogo quebra no boot (`Isoforge.combat is undefined`) e quem acusa é o
+  navegador, não o build. Reconstruir `dist/` E subir a versão são o mesmo passo, sempre
+  que a API pública muda.
+- **Fixture de teste também pode estar errada.** Nesta rodada: um alvo falso a 2 tiles
+  (fora do alcance, então o personagem andava em vez de golpear), uma grade nova usada
+  como chão (o `createGrid` nasce sólido, e a checagem de linha de visão falhou por isso
+  e não por linha de visão), e uma re-sondagem de golpe que já tinha recuperado (então
+  "recusou" veio falso). Antes de acusar o código, conferir o cenário do teste.
+- **Checagem de cópia com índice de linha fixo quebra quando o painel ganha uma linha.**
+  Procure a string na grade inteira em vez de indexar a linha.
 - **`PYTHONPATH` no ambiente Hermes aponta para `site-packages` de outro Python** e
   quebra `playwright`/`PIL` em venv: rode `PYTHONPATH= /venv/bin/python3 script.py`.
 - **Caractere sem glifo vira espaço em silêncio.** O conjunto de glifos precisa
