@@ -6,7 +6,7 @@ function createHud() {
   var ids = [
     "fps", "frame-p50", "frame-p95", "draw-p95", "tiles", "blocks",
     "sprites", "tick", "seed", "state", "mouse-tile", "player-tile",
-    "move-mode", "scale", "steps", "bounds", "drawables", "world"
+    "move-mode", "scale", "steps", "bounds", "drawables", "culled", "world"
   ];
   for (var i = 0; i < ids.length; i++) {
     fields[ids[i]] = document.getElementById("hud-" + ids[i]);
@@ -44,6 +44,7 @@ function createHud() {
     set("steps", String(stats.lastSteps));
     set("bounds", data.bounds);
     set("drawables", String(data.render.drawables));
+    set("culled", String(data.render.culled));
     set("world", data.worldSize);
   }
 

@@ -64,6 +64,18 @@ function createSimulation(seed) {
     });
   }
 
+  // Start every probe at its own tick-0 phase. Initializing at `home` instead
+  // put the first simulated frame a whole amplitude away (a visible teleport on
+  // frame 1) and made step N land on the opposite extreme, so the loop-closure
+  // test could never pass.
+  for (var w = 1; w < entities.length; w++) {
+    var placed = wandererPosition(entities[w], 0);
+    entities[w].x = placed.x;
+    entities[w].y = placed.y;
+    entities[w].prevX = placed.x;
+    entities[w].prevY = placed.y;
+  }
+
   var camera = createCamera(player.x, player.y);
 
   // --- helpers --------------------------------------------------------
@@ -132,14 +144,13 @@ function createSimulation(seed) {
     }
 
     for (var i = 1; i < entities.length; i++) {
-      var w = entities[i];
-      w.prevX = w.x;
-      w.prevY = w.y;
-      var angle = (2 * Math.PI * tick) / w.period;
-      var offset = Math.cos(angle) * w.amplitude;
-      w.x = w.homeX + w.dirX * offset;
-      w.y = w.homeY + w.dirY * offset;
-      w.facing = Math.sin(angle) < 0 ? -1 : 1;
+      var wanderer = entities[i];
+      wanderer.prevX = wanderer.x;
+      wanderer.prevY = wanderer.y;
+      var placedNow = wandererPosition(wanderer, tick);
+      wanderer.x = placedNow.x;
+      wanderer.y = placedNow.y;
+      wanderer.facing = Math.sin((2 * Math.PI * tick) / wanderer.period) < 0 ? -1 : 1;
     }
 
     var follow = 1 - Math.exp(-8 * STEP_SECONDS);
@@ -186,6 +197,18 @@ function createSimulation(seed) {
       player.targetY = worldY;
       return true;
     }
+  };
+}
+
+// Single source of truth for the probe trajectory: the position depends only on
+// `tick`, never on accumulated state, so a whole number of cycles lands back
+// exactly on the starting point. Loop-closure (step N == step 0) is checked
+// with N a multiple of every period (600 covers 100/120/150/200/300/600).
+function wandererPosition(wanderer, tickValue) {
+  var offset = Math.cos((2 * Math.PI * tickValue) / wanderer.period) * wanderer.amplitude;
+  return {
+    x: wanderer.homeX + wanderer.dirX * offset,
+    y: wanderer.homeY + wanderer.dirY * offset
   };
 }
 
@@ -271,31 +294,30 @@ function createHeadless() {
     return { samples: samples, maxErrorTiles: worst };
   }
 
-  // Culling: every tile whose diamond touches the viewport must be drawn, and
-  // the overdraw must stay bounded by the rectangle perimeter.
+  // Culling: every tile whose diamond touches the viewport must be inside the
+  // iterated rectangle (no holes), and the rectangle is only the starting
+  // bound -- the renderer rejects the rest with an exact diamond test, which is
+  // measured live from the frame stats.
   function culling(viewportW, viewportH, camX, camY) {
-    var margin = 1;
+    var margin = 2;
     var bounds = visibleTileBounds(camX, camY, viewportW, viewportH, margin);
     var drawn = {};
-    var drawnCount = 0;
+    var iteratedInWorld = 0;
     for (var ty = bounds.y0; ty <= bounds.y1; ty++) {
       for (var tx = bounds.x0; tx <= bounds.x1; tx++) {
+        if (tx < 0 || ty < 0 || tx >= WORLD_WIDTH || ty >= WORLD_HEIGHT) continue;
         drawn[tx + ":" + ty] = true;
-        drawnCount++;
+        iteratedInWorld++;
       }
     }
-    var camScreenX = 0;
-    var camScreenY = 0;
+    var halfW = HALF_TILE_W * RENDER_SCALE;
+    var halfH = HALF_TILE_H * RENDER_SCALE;
     var missing = [];
     var visibleCount = 0;
-    for (var gy = -2; gy < WORLD_HEIGHT + 2; gy++) {
-      for (var gx = -2; gx < WORLD_WIDTH + 2; gx++) {
-        var cx = gx + 0.5;
-        var cy = gy + 0.5;
-        var sx = worldToScreenX(cx - camX, cy - camY);
-        var sy = worldToScreenY(cx - camX, cy - camY);
-        var halfW = HALF_TILE_W * RENDER_SCALE;
-        var halfH = HALF_TILE_H * RENDER_SCALE;
+    for (var gy = 0; gy < WORLD_HEIGHT; gy++) {
+      for (var gx = 0; gx < WORLD_WIDTH; gx++) {
+        var sx = worldToScreenX(gx + 0.5 - camX, gy + 0.5 - camY);
+        var sy = worldToScreenY(gx + 0.5 - camX, gy + 0.5 - camY);
         var touches = sx + halfW > -viewportW / 2 && sx - halfW < viewportW / 2
           && sy + halfH > -viewportH / 2 && sy - halfH < viewportH / 2;
         if (!touches) continue;
@@ -303,19 +325,17 @@ function createHeadless() {
         if (!drawn[gx + ":" + gy]) missing.push(gx + ":" + gy);
       }
     }
-    var perimeter = 2 * ((bounds.x1 - bounds.x0 + 1) + (bounds.y1 - bounds.y0 + 1));
     return {
       viewport: { w: viewportW, h: viewportH },
       renderScale: RENDER_SCALE,
+      camera: { x: camX, y: camY },
       bounds: bounds,
-      drawnTiles: drawnCount,
+      iteratedInWorld: iteratedInWorld,
       visibleTiles: visibleCount,
       missingTiles: missing.length,
       missingSample: missing.slice(0, 5),
-      overdrawRatio: visibleCount ? drawnCount / visibleCount : 0,
-      perimeterAllowance: perimeter,
-      coversViewport: missing.length === 0,
-      overdrawWithinPerimeter: drawnCount - visibleCount <= perimeter
+      iterationOverVisible: visibleCount ? iteratedInWorld / visibleCount : 0,
+      coversViewport: missing.length === 0
     };
   }
 

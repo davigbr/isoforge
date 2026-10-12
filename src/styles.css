@@ -122,6 +122,17 @@ html, body {
 
 @media (max-width: 760px) {
   .panel { min-width: 168px; font-size: 11px; }
-  #control-bar { gap: 5px; font-size: 10px; }
+  #control-bar {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    transform: none;
+    flex-wrap: wrap;
+    justify-content: center;
+    white-space: normal;
+    gap: 5px;
+    font-size: 10px;
+    max-width: none;
+  }
   #control-bar .key { padding: 0 3px; }
 }

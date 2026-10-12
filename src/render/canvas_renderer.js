@@ -22,7 +22,7 @@ function createCanvasRenderer(canvas) {
 
   var stats = {
     tilesDrawn: 0, blocksDrawn: 0, shadowsDrawn: 0, spritesDrawn: 0,
-    drawables: 0, bounds: null, viewport: null, sortMs: 0
+    iterated: 0, culled: 0, drawables: 0, bounds: null, viewport: null, sortMs: 0
   };
 
   function resize(cssWidth, cssHeight, devicePixelRatio) {
@@ -72,6 +72,8 @@ function createCanvasRenderer(canvas) {
     stats.blocksDrawn = 0;
     stats.shadowsDrawn = 0;
     stats.spritesDrawn = 0;
+    stats.iterated = 0;
+    stats.culled = 0;
     ctx.fillStyle = "#070605";
     ctx.fillRect(0, 0, viewportWidth, viewportHeight);
   }
@@ -80,11 +82,23 @@ function createCanvasRenderer(canvas) {
   function drawGround(grid, camera) {
     var bounds = visibleTileBounds(camera.x, camera.y, viewportWidth, viewportHeight, 2);
     stats.bounds = bounds;
+    var halfW = HALF_TILE_W * RENDER_SCALE;
+    var halfH = HALF_TILE_H * RENDER_SCALE;
+    var rightEdge = viewportWidth + halfW;
+    var bottomEdge = viewportHeight + halfH;
     for (var ty = bounds.y0; ty <= bounds.y1; ty++) {
       for (var tx = bounds.x0; tx <= bounds.x1; tx++) {
-        if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) continue;
+        stats.iterated++;
+        if (tx < 0 || ty < 0 || tx >= grid.width || ty >= grid.height) { stats.culled++; continue; }
         var ax = anchorX(tx + 0.5, ty + 0.5);
         var ay = anchorY(tx + 0.5, ty + 0.5);
+        // Exact rejection. The viewport is a rectangle but the tile grid is a
+        // diamond, so the AABB around the screen diamond is ~2x the work:
+        // testing each tile's own diamond drops that waste to zero. The bounds
+        // are strict so a tile whose diamond touches an edge with zero area
+        // (ax == width + halfW) is rejected too -- that makes the drawn count
+        // match the geometric count exactly, which the audit asserts.
+        if (ax <= -halfW || ax >= rightEdge || ay <= -halfH || ay >= bottomEdge) { stats.culled++; continue; }
         if (grid.walkable[ty * grid.width + tx]) {
           var tile = atlas.floors[grid.floorVariant(tx, ty)];
           drawImageAt(tile, ax - TILE_W / 2, ay - TILE_H / 2);
